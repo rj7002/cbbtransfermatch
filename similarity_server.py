@@ -18,9 +18,7 @@ gemini = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 GEMINI_MODEL = "models/gemini-3.1-flash-lite-preview"
 _overview_cache = {}
 
-# -----------------------------
 # LOAD DATA
-# -----------------------------
 team_url   = os.getenv("API_BASE_URL") + "/api/gs/team-agg-pbp-stats?competitionId=41097&divisionId=1&scope=season"
 player_url = os.getenv("API_BASE_URL") + "/api/gs/player-agg-pbp-stats?competitionId=41097&divisionId=1&scope=season"
 stats_url  = os.getenv("API_BASE_URL") + "/api/gs/player-agg-stats-public?competitionId=41097&divisionId=1&scope=season"
@@ -51,25 +49,17 @@ playerdf["fullName"] = playerdf["fullName"]
 playerdf["teamFullName"] = playerdf["teamMarket"] + " " + playerdf["teamName"]
 playerdf = playerdf.merge(statsdf, on="playerId", how="left", suffixes=("", "_stats"))
 
-# -----------------------------
 # FEATURES
-# -----------------------------
 # Shot-type features only — these form a single distribution (all FGA by type)
-# Left/center/right and transition/halfcourt dropped: they're separate taxonomies,
-# not one distribution, so the row-sum normalization was incorrect for them.
 FINAL_FEATURES = [
     "rim_freq", "paint_freq", "midrange_freq",
     "corner3_freq", "atb3_freq", "deep3_freq"
 ]
 
-# -----------------------------
 # BUILD FEATURES
-# -----------------------------
 def build_features(df):
     df = df.copy()
 
-    # layupDunkFgaFreq is the combined at-rim category; adding layup+dunk on top
-    # would double-count. Use the combined field only.
     df["rim_freq"]      = df.get("layupDunkFgaFreq", 0)
     df["paint_freq"]    = df.get("paint2FgaFreq", 0)
     df["midrange_freq"] = df.get("mid2FgaFreqAllS01", 0) + df.get("mid2FgaFreqAllS12", 0) + df.get("mid2FgaFreqAllS23", 0)
@@ -87,8 +77,6 @@ playerdf = pd.concat([playerdf, build_features(playerdf)], axis=1)
 playerdf_all = pd.concat([playerdf_all, build_features(playerdf_all)], axis=1)
 
 # Precompute eFG% normalization bounds across the portal player pool.
-# eFG% = fg2Pct * (2PA share) + 1.5 * fg3Pct * (3PA share)
-# where shot-type shares come from the player's own feature distribution.
 def _player_efg(row):
     two_share  = row["rim_freq"] + row["paint_freq"] + row["midrange_freq"]
     three_share = row["corner3_freq"] + row["atb3_freq"] + row["deep3_freq"]
@@ -98,9 +86,7 @@ _efg_series = playerdf.apply(_player_efg, axis=1)
 EFG_LO = float(_efg_series.quantile(0.05))
 EFG_HI = float(_efg_series.quantile(0.95))
 
-# -----------------------------
 # GAP PROFILE (PORTAL + SENIORS)
-# -----------------------------
 def compute_team_gap_profile(team):
 
     in_portal = playerdf_all.get("inPortalAfterSeason", False)
@@ -134,9 +120,7 @@ def compute_team_gap_profile(team):
 
     return gap
 
-# -----------------------------
 # EXPLANATION
-# -----------------------------
 def generate_explanation(player, gap, a):
 
     explanations = []
@@ -156,9 +140,7 @@ def generate_explanation(player, gap, a):
 
     return explanations[:3]
 
-# -----------------------------
 # MATCH SCORE
-# -----------------------------
 def compute_match_score(player, team, precomputed_gap=None):
 
     a = np.nan_to_num(np.array(player[FINAL_FEATURES], dtype=np.float64))
@@ -167,8 +149,6 @@ def compute_match_score(player, team, precomputed_gap=None):
     if np.sum(a) == 0 or np.sum(b) == 0:
         return {"FinalScore": 0}
 
-    # Both vectors already sum to ~1 from build_features, but re-normalize
-    # defensively in case of floating point drift.
     a_p = a / (np.sum(a) + 1e-9)
     b_p = b / (np.sum(b) + 1e-9)
 
@@ -212,9 +192,7 @@ def compute_match_score(player, team, precomputed_gap=None):
         "Explanation":     explanation
     }
 
-# -----------------------------
 # TEAM FIT
-# -----------------------------
 @app.route("/get_team_fit/<team_id>")
 def get_team_fit(team_id):
 
@@ -244,9 +222,7 @@ def get_team_fit(team_id):
     df = pd.DataFrame(results).sort_values("FinalScore", ascending=False)
     return jsonify(df.head(50).to_dict(orient="records"))
 
-# -----------------------------
-# PLAYER FIT (BACK 🔥)
-# -----------------------------
+# PLAYER FIT 
 @app.route("/get_player_fit/<player_id>")
 def get_player_fit(player_id):
 
@@ -271,9 +247,7 @@ def get_player_fit(player_id):
     df = pd.DataFrame(results).sort_values("FinalScore", ascending=False)
     return jsonify(df.to_dict(orient="records"))
 
-# -----------------------------
 # TEAM NEEDS
-# -----------------------------
 @app.route("/get_team_needs/<team_id>")
 def get_team_needs(team_id):
 
@@ -298,9 +272,7 @@ def get_team_needs(team_id):
 
     return jsonify({"Team":team["fullName"],"Needs":needs})
 
-# -----------------------------
 # AI PLAYER OVERVIEW
-# -----------------------------
 @app.route("/get_player_overview/<player_name>")
 def get_player_overview(player_name):
     if player_name in _overview_cache:
@@ -341,9 +313,7 @@ Write the scouting report now:"""
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# -----------------------------
 # LISTS (for search dropdowns)
-# -----------------------------
 @app.route("/get_teams")
 def get_teams():
     return jsonify(sorted(teamdf["fullName"].dropna().tolist()))
@@ -352,9 +322,7 @@ def get_teams():
 def get_players():
     return jsonify(sorted(playerdf["fullName"].dropna().tolist()))
 
-# -----------------------------
 # AGENT TOOL FUNCTIONS
-# -----------------------------
 def _get_team_stats(team_name: str) -> str:
     matches = teamdf[teamdf["fullName"].str.lower().str.contains(team_name.lower(), na=False)]
     if matches.empty:
@@ -531,8 +499,6 @@ def chat():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# -----------------------------
 # RUN
-# -----------------------------
 if __name__ == "__main__":
     app.run(debug=True, port=5002)
