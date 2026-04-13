@@ -519,17 +519,29 @@ export default function App() {
     return qs ? `${base}&${qs}` : base
   }
 
-  function refetchWithFilters(val, currentMode, currentGender, filters) {
+  async function doFilterFetch(val, currentMode, currentGender, filters) {
+    setLoading(true)
+    try {
+      const url = buildFetchUrl(val, currentMode, currentGender, filters)
+      const data = await fetch(url).then(r => r.json())
+      if (Array.isArray(data)) setRawResults(data)
+    } catch {}
+    finally { setLoading(false) }
+  }
+
+  // Immediate refetch for chip clicks
+  function refetchNow(val, currentMode, currentGender, filters) {
     if (!val) return
     clearTimeout(filterRefetchTimer.current)
-    filterRefetchTimer.current = setTimeout(async () => {
-      setLoading(true)
-      try {
-        const url = buildFetchUrl(val, currentMode, currentGender, filters)
-        const data = await fetch(url).then(r => r.json())
-        if (Array.isArray(data)) setRawResults(data)
-      } catch {}
-      finally { setLoading(false) }
+    doFilterFetch(val, currentMode, currentGender, filters)
+  }
+
+  // Debounced refetch for the NIL slider (fires constantly while dragging)
+  function refetchDebounced(val, currentMode, currentGender, filters) {
+    if (!val) return
+    clearTimeout(filterRefetchTimer.current)
+    filterRefetchTimer.current = setTimeout(() => {
+      doFilterFetch(val, currentMode, currentGender, filters)
     }, 350)
   }
 
@@ -685,7 +697,7 @@ export default function App() {
                   budget={nilBudget}
                   onChange={v => {
                     setNilBudget(v)
-                    refetchWithFilters(activeQuery, mode, gender, { nilBudget: v, yearFilter, posFilter, confFilter })
+                    refetchDebounced(activeQuery, mode, gender, { nilBudget: v, yearFilter, posFilter, confFilter })
                   }}
                   max={allOptions.maxNil}
                   filtered={results.length}
@@ -699,7 +711,7 @@ export default function App() {
                   selected={yearFilter}
                   onChange={v => {
                     setYearFilter(v)
-                    refetchWithFilters(activeQuery, mode, gender, { nilBudget, yearFilter: v, posFilter, confFilter })
+                    refetchNow(activeQuery, mode, gender, { nilBudget, yearFilter: v, posFilter, confFilter })
                   }}
                 />
               )}
@@ -710,7 +722,7 @@ export default function App() {
                   selected={posFilter}
                   onChange={v => {
                     setPosFilter(v)
-                    refetchWithFilters(activeQuery, mode, gender, { nilBudget, yearFilter, posFilter: v, confFilter })
+                    refetchNow(activeQuery, mode, gender, { nilBudget, yearFilter, posFilter: v, confFilter })
                   }}
                 />
               )}
@@ -721,11 +733,11 @@ export default function App() {
                   selected={confFilter}
                   onChange={v => {
                     setConfFilter(v)
-                    refetchWithFilters(activeQuery, mode, gender, { nilBudget, yearFilter, posFilter, confFilter: v })
+                    refetchNow(activeQuery, mode, gender, { nilBudget, yearFilter, posFilter, confFilter: v })
                   }}
                 />
               )}
-              <div className="results-list">
+              <div className={`results-list${loading ? ' results-list--loading' : ''}`}>
                 {results.map((item, i) =>
                   mode === 'team'
                     ? <PlayerCard

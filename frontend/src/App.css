@@ -250,6 +250,7 @@ body {
   align-items: flex-start;
 }
 .results-col { flex: 1; min-width: 0; }
+.results-list--loading { opacity: 0.4; pointer-events: none; transition: opacity 0.15s; }
 .results-header {
   font-size: 13px;
   color: var(--text-mid);
