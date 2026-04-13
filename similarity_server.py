@@ -272,9 +272,11 @@ def _gender_param():
 # -----------------------------
 # TEAM FIT
 # -----------------------------
-@app.route("/get_team_fit/<team_id>")
+@app.route("/get_team_fit/<team_id>", methods=["GET", "POST"])
 def get_team_fit(team_id):
-    d = _get_data(_gender_param())
+    body = request.get_json(silent=True) or {}
+    gender = body.get("gender", request.args.get("gender", "MALE")).upper()
+    d = _get_data(gender)
     teamdf, playerdf, playerdf_all = d["teamdf"], d["playerdf"], d["playerdf_all"]
     efg_lo, efg_hi = d["efg_lo"], d["efg_hi"]
 
@@ -285,8 +287,30 @@ def get_team_fit(team_id):
     team = team.iloc[0]
     precomputed_gap = compute_team_gap_profile(team, playerdf_all)
 
+    # Read filters from POST body OR query params
+    nil_min = body.get("nil_min") or (request.args.get("nil_min") and int(request.args.get("nil_min")))
+    nil_max = body.get("nil_max") or (request.args.get("nil_max") and int(request.args.get("nil_max")))
+
+    years_raw = body.get("years") or request.args.get("years", "")
+    years = years_raw if isinstance(years_raw, list) else [y for y in years_raw.split(",") if y]
+
+    pos_raw = body.get("positions") or request.args.get("positions", "")
+    positions = pos_raw if isinstance(pos_raw, list) else [p for p in pos_raw.split(",") if p]
+
+    pool = playerdf
+    if nil_min is not None:
+        pool = pool[pool["nilValue"] >= nil_min]
+    if nil_max is not None:
+        pool = pool[pool["nilValue"] <= nil_max]
+    if years:
+        pool = pool[pool["classYr"].isin(years)]
+    if positions:
+        pool = pool[pool["position"].isin(positions)]
+
+    print(f"[team_fit] gender={gender} years={years} pos={positions} nil={nil_min}-{nil_max} | pool {len(playerdf)}→{len(pool)}")
+
     results = []
-    for _, player in playerdf.iterrows():
+    for _, player in pool.iterrows():
         score = compute_match_score(player, team, efg_lo, efg_hi, precomputed_gap=precomputed_gap)
         results.append({
             "Player": player["fullName"],
@@ -301,6 +325,8 @@ def get_team_fit(team_id):
             **score
         })
 
+    if not results:
+        return jsonify([])
     df = pd.DataFrame(results).sort_values("FinalScore", ascending=False)
     return jsonify(df.head(50).to_dict(orient="records"))
 
@@ -311,9 +337,11 @@ TEAM_STAT_COLS = ["ptsScoredPg", "fgPct", "fg3Pct", "efgPct", "rebPg",
                   "astPg", "tovPg", "ortg", "drtg", "netRtg",
                   "pace", "overallWins", "overallLosses", "netRanking"]
 
-@app.route("/get_player_fit/<player_id>")
+@app.route("/get_player_fit/<player_id>", methods=["GET", "POST"])
 def get_player_fit(player_id):
-    d = _get_data(_gender_param())
+    body = request.get_json(silent=True) or {}
+    gender = body.get("gender", request.args.get("gender", "MALE")).upper()
+    d = _get_data(gender)
     teamdf, playerdf, playerdf_all = d["teamdf"], d["playerdf"], d["playerdf_all"]
     teamstatsdf = d["teamstatsdf"]
     efg_lo, efg_hi = d["efg_lo"], d["efg_hi"]
@@ -324,14 +352,20 @@ def get_player_fit(player_id):
 
     player = player_row.iloc[0]
 
-    # Index team stats by teamId for fast lookup
+    # Read conferences filter from POST body OR query params
+    conf_raw = body.get("conferences") or request.args.get("conferences", "")
+    conferences = conf_raw if isinstance(conf_raw, list) else [c for c in conf_raw.split(",") if c]
+
     ts_index = teamstatsdf.set_index("teamId")
 
+    pool = teamdf
+    if conferences:
+        pool = pool[pool["conferenceLongName"].isin(conferences)]
+
     results = []
-    for _, team in teamdf.iterrows():
+    for _, team in pool.iterrows():
         score = compute_match_score(player, team, efg_lo, efg_hi, playerdf_all=playerdf_all)
 
-        # Attach team stats if available
         tid = team["teamId"]
         team_stats = {}
         if tid in ts_index.index:
