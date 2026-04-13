@@ -500,33 +500,33 @@ export default function App() {
   // Filters are applied server-side — results is just weights applied to whatever the backend returned
   const results = rawResults.length > 0 ? applyWeights(rawResults, weights) : []
 
-  function buildFetchUrl(val, currentMode, currentGender, filters) {
-    const base = currentMode === 'team'
-      ? `${API}/get_team_fit/${encodeURIComponent(val)}?gender=${currentGender}`
-      : `${API}/get_player_fit/${encodeURIComponent(val)}?gender=${currentGender}`
-    const p = new URLSearchParams()
+  function buildFetchRequest(val, currentMode, currentGender, filters) {
+    const url = currentMode === 'team'
+      ? `${API}/get_team_fit/${encodeURIComponent(val)}`
+      : `${API}/get_player_fit/${encodeURIComponent(val)}`
+    const body = { gender: currentGender }
     if (currentMode === 'team') {
       if (filters.nilBudget) {
-        p.set('nil_min', filters.nilBudget[0])
-        p.set('nil_max', filters.nilBudget[1])
+        body.nil_min = filters.nilBudget[0]
+        body.nil_max = filters.nilBudget[1]
       }
-      if (filters.yearFilter?.length) p.set('years', filters.yearFilter.join(','))
-      if (filters.posFilter?.length)  p.set('positions', filters.posFilter.join(','))
+      if (filters.yearFilter?.length)  body.years     = filters.yearFilter
+      if (filters.posFilter?.length)   body.positions  = filters.posFilter
     } else {
-      if (filters.confFilter?.length) p.set('conferences', filters.confFilter.join(','))
+      if (filters.confFilter?.length)  body.conferences = filters.confFilter
     }
-    const qs = p.toString()
-    return qs ? `${base}&${qs}` : base
+    return {
+      url,
+      options: { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
+    }
   }
 
   async function doFilterFetch(val, currentMode, currentGender, filters) {
     setLoading(true)
     try {
-      const url = buildFetchUrl(val, currentMode, currentGender, filters)
-      console.log('[filter] fetching:', url)
-      const res = await fetch(url)
+      const { url, options } = buildFetchRequest(val, currentMode, currentGender, filters)
+      const res = await fetch(url, options)
       const data = await res.json()
-      console.log('[filter] response:', Array.isArray(data) ? `${data.length} results` : data)
       if (Array.isArray(data)) setRawResults(data)
     } catch (e) {
       console.error('[filter] error:', e)
@@ -592,8 +592,8 @@ export default function App() {
     setLoading(true)
     clearFilters()
     try {
-      const url = buildFetchUrl(val, mode, gender, {})
-      const data = await fetch(url).then(r => r.json())
+      const { url, options } = buildFetchRequest(val, mode, gender, {})
+      const data = await fetch(url, options).then(r => r.json())
       if (data.error) { setError(data.error); setRawResults([]) }
       else {
         setRawResults(data)

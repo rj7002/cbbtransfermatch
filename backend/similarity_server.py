@@ -272,9 +272,11 @@ def _gender_param():
 # -----------------------------
 # TEAM FIT
 # -----------------------------
-@app.route("/get_team_fit/<team_id>")
+@app.route("/get_team_fit/<team_id>", methods=["GET", "POST"])
 def get_team_fit(team_id):
-    d = _get_data(_gender_param())
+    body = request.get_json(silent=True) or {}
+    gender = body.get("gender", request.args.get("gender", "MALE")).upper()
+    d = _get_data(gender)
     teamdf, playerdf, playerdf_all = d["teamdf"], d["playerdf"], d["playerdf_all"]
     efg_lo, efg_hi = d["efg_lo"], d["efg_hi"]
 
@@ -285,11 +287,11 @@ def get_team_fit(team_id):
     team = team.iloc[0]
     precomputed_gap = compute_team_gap_profile(team, playerdf_all)
 
-    # Parse filters — applied to pool before scoring so top 50 respects constraints
-    nil_min   = request.args.get("nil_min", type=int)
-    nil_max   = request.args.get("nil_max", type=int)
-    years     = [y for y in request.args.get("years", "").split(",") if y]
-    positions = [p for p in request.args.get("positions", "").split(",") if p]
+    # Filters from JSON body (POST) — applied before scoring so top 50 respects them
+    nil_min   = body.get("nil_min")
+    nil_max   = body.get("nil_max")
+    years     = body.get("years", [])
+    positions = body.get("positions", [])
 
     pool = playerdf
     if nil_min is not None:
@@ -300,6 +302,8 @@ def get_team_fit(team_id):
         pool = pool[pool["classYr"].isin(years)]
     if positions:
         pool = pool[pool["position"].isin(positions)]
+
+    print(f"[team_fit] gender={gender} years={years} pos={positions} nil={nil_min}-{nil_max} | pool {len(playerdf)}→{len(pool)}")
 
     results = []
     for _, player in pool.iterrows():
@@ -329,9 +333,11 @@ TEAM_STAT_COLS = ["ptsScoredPg", "fgPct", "fg3Pct", "efgPct", "rebPg",
                   "astPg", "tovPg", "ortg", "drtg", "netRtg",
                   "pace", "overallWins", "overallLosses", "netRanking"]
 
-@app.route("/get_player_fit/<player_id>")
+@app.route("/get_player_fit/<player_id>", methods=["GET", "POST"])
 def get_player_fit(player_id):
-    d = _get_data(_gender_param())
+    body = request.get_json(silent=True) or {}
+    gender = body.get("gender", request.args.get("gender", "MALE")).upper()
+    d = _get_data(gender)
     teamdf, playerdf, playerdf_all = d["teamdf"], d["playerdf"], d["playerdf_all"]
     teamstatsdf = d["teamstatsdf"]
     efg_lo, efg_hi = d["efg_lo"], d["efg_hi"]
@@ -342,8 +348,8 @@ def get_player_fit(player_id):
 
     player = player_row.iloc[0]
 
-    # Parse filters — applied to pool before scoring
-    conferences = [c for c in request.args.get("conferences", "").split(",") if c]
+    # Filters from JSON body (POST)
+    conferences = body.get("conferences", [])
 
     # Index team stats by teamId for fast lookup
     ts_index = teamstatsdf.set_index("teamId")
