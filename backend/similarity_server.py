@@ -285,8 +285,24 @@ def get_team_fit(team_id):
     team = team.iloc[0]
     precomputed_gap = compute_team_gap_profile(team, playerdf_all)
 
+    # Parse filters — applied to pool before scoring so top 50 respects constraints
+    nil_min   = request.args.get("nil_min", type=int)
+    nil_max   = request.args.get("nil_max", type=int)
+    years     = [y for y in request.args.get("years", "").split(",") if y]
+    positions = [p for p in request.args.get("positions", "").split(",") if p]
+
+    pool = playerdf
+    if nil_min is not None:
+        pool = pool[pool["nilValue"] >= nil_min]
+    if nil_max is not None:
+        pool = pool[pool["nilValue"] <= nil_max]
+    if years:
+        pool = pool[pool["classYr"].isin(years)]
+    if positions:
+        pool = pool[pool["position"].isin(positions)]
+
     results = []
-    for _, player in playerdf.iterrows():
+    for _, player in pool.iterrows():
         score = compute_match_score(player, team, efg_lo, efg_hi, precomputed_gap=precomputed_gap)
         results.append({
             "Player": player["fullName"],
@@ -324,11 +340,18 @@ def get_player_fit(player_id):
 
     player = player_row.iloc[0]
 
+    # Parse filters — applied to pool before scoring
+    conferences = [c for c in request.args.get("conferences", "").split(",") if c]
+
     # Index team stats by teamId for fast lookup
     ts_index = teamstatsdf.set_index("teamId")
 
+    pool = teamdf
+    if conferences:
+        pool = pool[pool["conferenceLongName"].isin(conferences)]
+
     results = []
-    for _, team in teamdf.iterrows():
+    for _, team in pool.iterrows():
         score = compute_match_score(player, team, efg_lo, efg_hi, playerdf_all=playerdf_all)
 
         # Attach team stats if available
@@ -667,4 +690,258 @@ def chat():
 # RUN
 # -----------------------------
 if __name__ == "__main__":
-    app.run(debug=True, port=5002)
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host="0.0.0.0", port=port)
+
+# import os
+# from dotenv import load_dotenv
+# load_dotenv()
+
+# from datetime import datetime
+# from flask import Flask, jsonify, request
+# import pandas as pd
+# import numpy as np
+# import requests
+# import json
+# from sklearn.metrics.pairwise import cosine_similarity
+# from flask_cors import CORS
+# from google import genai
+# from google.genai import types as genai_types
+# import joblib
+
+# app = Flask(__name__)
+# CORS(app)
+
+# gemini = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+# GEMINI_MODEL = "models/gemini-3.1-flash-lite-preview"
+
+# _overview_cache = {}
+# _gender_cache = {}   
+
+# STAT_COLS = [
+#     "ptsScoredPg","astPg","rebPg","blkPg","stlPg","tovPg",
+#     "fgPct","fg2Pct","fg3Pct","ftPct"
+# ]
+
+# FINAL_FEATURES = [
+#     "rim_freq","paint_freq","midrange_freq",
+#     "corner3_freq","atb3_freq","deep3_freq"
+# ]
+
+# _MODELS_DIR = os.path.join(os.path.dirname(__file__), "models")
+
+
+# # -----------------------------
+# # NIL MODELS (cached once, lightweight)
+# # -----------------------------
+# def load_nil(gender):
+#     path = os.path.join(_MODELS_DIR, f"nil_meta_{gender.lower()}.json")
+#     with open(path) as f:
+#         meta = json.load(f)
+
+#     return {
+#         "model": joblib.load(os.path.join(_MODELS_DIR, f"nil_regressor_{gender.lower()}.pkl")),
+#         "features": meta["features"],
+#         "low": meta["nil_low_threshold"],
+#         "high": meta["nil_high_threshold"],
+#         "top": set(meta.get("conf_tier_top", [])),
+#         "mid": set(meta.get("conf_tier_mid", [])),
+#     }
+
+
+# NIL = {
+#     "MALE": load_nil("male"),
+#     "FEMALE": load_nil("female")
+# }
+
+
+# # -----------------------------
+# # CORE FEATURE ENGINE (light)
+# # -----------------------------
+# def build_features(df):
+#     df = df.copy()
+
+#     f = pd.DataFrame({
+#         "rim_freq": df.get("layupDunkFgaFreq", 0),
+#         "paint_freq": df.get("paint2FgaFreq", 0),
+#         "midrange_freq": (
+#             df.get("mid2FgaFreqAllS01", 0)
+#             + df.get("mid2FgaFreqAllS12", 0)
+#             + df.get("mid2FgaFreqAllS23", 0)
+#         ),
+#         "corner3_freq": df.get("c3FgaFreq", 0),
+#         "atb3_freq": df.get("atb3FgaFreq", 0),
+#         "deep3_freq": df.get("lng3FgaFreq", 0) + df.get("nba3FgaFreq", 0),
+#     })
+
+#     s = f.sum(axis=1).replace(0, 1)
+#     return f.div(s, axis=0)
+
+
+# # -----------------------------
+# # LAZY DATA LOADER 
+# # -----------------------------
+# def load_gender(gender):
+#     base = os.getenv("API_BASE_URL")
+
+#     comp = requests.get(base + "/api/gs/competitions/", timeout=20).json()
+#     year = datetime.now().year
+
+#     comp_id = next(
+#         c["competitionId"]
+#         for c in comp
+#         if c["gender"] == gender and c["startYear"] in (year, year - 1)
+#     )
+
+#     def fetch(url):
+#         return pd.DataFrame(requests.get(url, timeout=20).json())
+
+#     teamdf = fetch(f"{base}/api/gs/team-agg-pbp-stats?competitionId={comp_id}&divisionId=1&scope=season")
+#     playerdf = fetch(f"{base}/api/gs/player-agg-pbp-stats?competitionId={comp_id}&divisionId=1&scope=season")
+#     playerstats = fetch(f"{base}/api/gs/player-agg-stats-public?competitionId={comp_id}&divisionId=1&scope=season")
+#     teamstats = fetch(f"{base}/api/gs/team-agg-stats/competition/{comp_id}/division/1/scope/season/")
+
+#     # reduce memory immediately
+#     playerdf["mpg"] = (playerdf["minsPbp"] / playerdf["gpPbp"]).fillna(0).astype("float32")
+
+#     portal = playerdf[playerdf["inPortalAfterSeason"] == True].copy()
+
+#     # merge ONLY when needed (not duplicated)
+#     playerdf = portal.merge(playerstats, on="playerId", how="left")
+#     teamdf = teamdf[teamdf["isOffense"] == True].copy()
+
+#     teamdf["fullName"] = teamdf["teamMarket"] + " " + teamdf["teamName"]
+#     playerdf["fullName"] = playerdf["playerId"].astype(str)
+
+#     # features only ONCE
+#     teamdf = pd.concat([teamdf, build_features(teamdf)], axis=1)
+#     playerdf = pd.concat([playerdf, build_features(playerdf)], axis=1)
+
+#     return {
+#         "teamdf": teamdf,
+#         "playerdf": playerdf,
+#         "teamstats": teamstats,
+#         "comp_id": comp_id
+#     }
+
+
+# # -----------------------------
+# # GET DATA 
+# # -----------------------------
+# def get_data(gender):
+#     g = gender.upper()
+#     if g not in _gender_cache:
+#         _gender_cache[g] = load_gender(g)
+#     return _gender_cache[g]
+
+
+# # -----------------------------
+# # MATCH SCORE
+# # -----------------------------
+# def score(player, team):
+#     a = np.nan_to_num(np.array(player[FINAL_FEATURES], dtype=np.float32))
+#     b = np.nan_to_num(np.array(team[FINAL_FEATURES], dtype=np.float32))
+
+#     if a.sum() == 0 or b.sum() == 0:
+#         return 0
+
+#     a /= a.sum() + 1e-9
+#     b /= b.sum() + 1e-9
+
+#     return float(cosine_similarity([a], [b])[0][0])
+
+# @app.route("/")
+# def home():
+#     return jsonify({"status": "API is running"})
+
+# # -----------------------------
+# # TEAM FIT
+# # -----------------------------
+# @app.route("/get_team_fit/<team_id>")
+# def team_fit(team_id):
+#     d = get_data(request.args.get("gender", "MALE"))
+
+#     team = d["teamdf"][d["teamdf"]["fullName"] == team_id]
+#     if team.empty:
+#         return jsonify({"error": "not found"}), 404
+
+#     team = team.iloc[0]
+
+#     results = []
+#     for p in d["playerdf"].itertuples():
+#         results.append({
+#             "player": p.Index,
+#             "score": score(p, team)
+#         })
+
+#     return jsonify(sorted(results, key=lambda x: x["score"], reverse=True)[:50])
+
+
+# # -----------------------------
+# # TEAM NEEDS
+# # -----------------------------
+# @app.route("/get_team_needs/<team_id>")
+# def team_needs(team_id):
+#     d = get_data(request.args.get("gender", "MALE"))
+
+#     team = d["teamdf"][d["teamdf"]["teamId"] == int(team_id)]
+#     if team.empty:
+#         return jsonify({"error": "not found"}), 404
+
+#     team = team.iloc[0]
+#     gap = np.zeros(len(FINAL_FEATURES))
+
+#     return jsonify([
+#         {"feature": FINAL_FEATURES[i], "importance": float(gap[i])}
+#         for i in np.argsort(-gap)[:5]
+#     ])
+
+
+# # -----------------------------
+# # PLAYER FIT 
+# # -----------------------------
+# @app.route("/get_player_fit/<player_id>")
+# def player_fit(player_id):
+#     d = get_data(request.args.get("gender", "MALE"))
+
+#     player = d["playerdf"][d["playerdf"]["playerId"] == player_id]
+#     if player.empty:
+#         return jsonify({"error": "not found"}), 404
+
+#     player = player.iloc[0]
+
+#     results = []
+#     for t in d["teamdf"].itertuples():
+#         results.append({
+#             "team": t.fullName,
+#             "score": score(player, t)
+#         })
+
+#     return jsonify(sorted(results, key=lambda x: x["score"], reverse=True))
+
+
+# # -----------------------------
+# # OVERVIEW 
+# # -----------------------------
+# @app.route("/get_player_overview/<name>")
+# def overview(name):
+#     if name in _overview_cache:
+#         return jsonify(_overview_cache[name])
+
+#     prompt = f"Scouting report for {name}"
+
+#     res = gemini.models.generate_content(
+#         model=GEMINI_MODEL,
+#         contents=prompt
+#     )
+
+#     _overview_cache[name] = res.text
+#     return jsonify({"overview": res.text})
+
+
+# # -----------------------------
+# # RUN
+# # -----------------------------
+# if __name__ == "__main__":
+#     port = int(os.environ.get("PORT", 5000))
+#     app.run(host="0.0.0.0", port=port, debug=False)

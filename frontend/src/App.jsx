@@ -493,16 +493,45 @@ export default function App() {
   const [posFilter, setPosFilter]       = useState([])
   const [confFilter, setConfFilter]     = useState([])
 
-  const allResults = rawResults.length > 0 ? applyWeights(rawResults, weights) : []
+  const [activeQuery, setActiveQuery] = useState(null)
+  const [allOptions, setAllOptions] = useState({ years: [], positions: [], conferences: [], maxNil: 0, total: 0 })
+  const filterRefetchTimer = useRef(null)
 
-  const results = allResults.filter(item => {
-    if (nilBudget != null && item.NilValue != null &&
-        (item.NilValue < nilBudget[0] || item.NilValue > nilBudget[1])) return false
-    if (yearFilter.length > 0 && !yearFilter.includes(item.Year)) return false
-    if (posFilter.length  > 0 && !posFilter.includes(item.Position)) return false
-    if (confFilter.length > 0 && !confFilter.includes(item.Conference)) return false
-    return true
-  })
+  // Filters are applied server-side — results is just weights applied to whatever the backend returned
+  const results = rawResults.length > 0 ? applyWeights(rawResults, weights) : []
+
+  function buildFetchUrl(val, currentMode, currentGender, filters) {
+    const base = currentMode === 'team'
+      ? `${API}/get_team_fit/${encodeURIComponent(val)}?gender=${currentGender}`
+      : `${API}/get_player_fit/${encodeURIComponent(val)}?gender=${currentGender}`
+    const p = new URLSearchParams()
+    if (currentMode === 'team') {
+      if (filters.nilBudget) {
+        p.set('nil_min', filters.nilBudget[0])
+        p.set('nil_max', filters.nilBudget[1])
+      }
+      if (filters.yearFilter?.length) p.set('years', filters.yearFilter.join(','))
+      if (filters.posFilter?.length)  p.set('positions', filters.posFilter.join(','))
+    } else {
+      if (filters.confFilter?.length) p.set('conferences', filters.confFilter.join(','))
+    }
+    const qs = p.toString()
+    return qs ? `${base}&${qs}` : base
+  }
+
+  function refetchWithFilters(val, currentMode, currentGender, filters) {
+    if (!val) return
+    clearTimeout(filterRefetchTimer.current)
+    filterRefetchTimer.current = setTimeout(async () => {
+      setLoading(true)
+      try {
+        const url = buildFetchUrl(val, currentMode, currentGender, filters)
+        const data = await fetch(url).then(r => r.json())
+        if (Array.isArray(data)) setRawResults(data)
+      } catch {}
+      finally { setLoading(false) }
+    }, 350)
+  }
 
   useEffect(() => {
     setQuery('')
@@ -526,27 +555,40 @@ export default function App() {
     setRawResults([])
     setSelected(null)
     setError(null)
+    setActiveQuery(null)
+    setAllOptions({ years: [], positions: [], conferences: [], maxNil: 0, total: 0 })
     clearFilters()
   }
 
   function switchGender(g) {
     setGender(g)
     setMode('team')
+    setActiveQuery(null)
+    setAllOptions({ years: [], positions: [], conferences: [], maxNil: 0, total: 0 })
     clearFilters()
   }
 
   async function handleSelect(val) {
     setQuery(val)
+    setActiveQuery(val)
     setSelected(null)
     setError(null)
     setLoading(true)
+    clearFilters()
     try {
-      const url = mode === 'team'
-        ? `${API}/get_team_fit/${encodeURIComponent(val)}?gender=${gender}`
-        : `${API}/get_player_fit/${encodeURIComponent(val)}?gender=${gender}`
+      const url = buildFetchUrl(val, mode, gender, {})
       const data = await fetch(url).then(r => r.json())
       if (data.error) { setError(data.error); setRawResults([]) }
-      else setRawResults(data.slice(0, 40))
+      else {
+        setRawResults(data)
+        setAllOptions({
+          years: [...new Set(data.map(r => r.Year).filter(Boolean))].sort(),
+          positions: [...new Set(data.map(r => r.Position).filter(Boolean))].sort(),
+          conferences: [...new Set(data.map(r => r.Conference).filter(Boolean))].sort(),
+          maxNil: data.reduce((mx, r) => Math.max(mx, r.NilValue ?? 0), 0),
+          total: data.length,
+        })
+      }
     } catch {
       setError('Could not reach the server.')
     } finally {
@@ -638,37 +680,49 @@ export default function App() {
                 <span className="results-query">{query}</span>
               </div>
               <WeightsPanel weights={weights} onChange={setWeights} />
-              {mode === 'team' && allResults.some(r => r.NilValue != null) && (
+              {mode === 'team' && allOptions.maxNil > 0 && (
                 <BudgetFilter
                   budget={nilBudget}
-                  onChange={setNilBudget}
-                  max={Math.max(...allResults.map(r => r.NilValue ?? 0))}
+                  onChange={v => {
+                    setNilBudget(v)
+                    refetchWithFilters(activeQuery, mode, gender, { nilBudget: v, yearFilter, posFilter, confFilter })
+                  }}
+                  max={allOptions.maxNil}
                   filtered={results.length}
-                  total={allResults.length}
+                  total={allOptions.total}
                 />
               )}
               {mode === 'team' && (
                 <ChipFilter
                   label="Class Year"
-                  options={[...new Set(allResults.map(r => r.Year).filter(Boolean))].sort()}
+                  options={allOptions.years}
                   selected={yearFilter}
-                  onChange={setYearFilter}
+                  onChange={v => {
+                    setYearFilter(v)
+                    refetchWithFilters(activeQuery, mode, gender, { nilBudget, yearFilter: v, posFilter, confFilter })
+                  }}
                 />
               )}
               {mode === 'team' && (
                 <ChipFilter
                   label="Position"
-                  options={[...new Set(allResults.map(r => r.Position).filter(Boolean))].sort()}
+                  options={allOptions.positions}
                   selected={posFilter}
-                  onChange={setPosFilter}
+                  onChange={v => {
+                    setPosFilter(v)
+                    refetchWithFilters(activeQuery, mode, gender, { nilBudget, yearFilter, posFilter: v, confFilter })
+                  }}
                 />
               )}
               {mode === 'player' && (
                 <ChipFilter
                   label="Conference"
-                  options={[...new Set(allResults.map(r => r.Conference).filter(Boolean))].sort()}
+                  options={allOptions.conferences}
                   selected={confFilter}
-                  onChange={setConfFilter}
+                  onChange={v => {
+                    setConfFilter(v)
+                    refetchWithFilters(activeQuery, mode, gender, { nilBudget, yearFilter, posFilter, confFilter: v })
+                  }}
                 />
               )}
               <div className="results-list">
