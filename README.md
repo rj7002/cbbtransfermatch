@@ -1,3 +1,4 @@
+<img width="1506" height="745" alt="Screenshot 2026-04-12 at 9 42 28 PM" src="https://github.com/user-attachments/assets/7cd974c3-c35b-4164-9b73-0f5266337301" />
 # PortalMatch — CBB Transfer Portal Matching Engine
 
 A full-stack college basketball analytics tool that matches transfer portal players to programs (and vice versa) using shot profile similarity, opportunity fit, gap analysis, and shooting efficiency. Includes AI-generated scouting reports, an agentic analyst chat, NIL valuation models, and real-time filtering.
