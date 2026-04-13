@@ -1,10 +1,6 @@
-<<<<<<< HEAD
-# PortalMatch — CBB Transfer Portal Matching Engine
-=======
 <img width="1506" height="745" alt="Screenshot 2026-04-12 at 9 42 28 PM" src="https://github.com/user-attachments/assets/7cd974c3-c35b-4164-9b73-0f5266337301" />
 
 ## PortalMatch — CBB Transfer Portal Matching Engine
->>>>>>> d80ee7d6c5754259e5e12a2e45bfa7cc0c30ad3c
 
 A full-stack college basketball analytics tool that matches transfer portal players to programs (and vice versa) using shot profile similarity, opportunity fit, gap analysis, and shooting efficiency. Includes AI-generated scouting reports, an agentic analyst chat, NIL valuation models, and real-time filtering.
 
@@ -54,53 +50,6 @@ A full-stack college basketball analytics tool that matches transfer portal play
 └── full_model.ipynb
 ```
 
-<<<<<<< HEAD
-## Setup
-
-### Backend
-
-```bash
-cd backend
-pip install -r requirements.txt
-```
-
-Create a `.env` file in the `backend/` directory:
-
-```
-GEMINI_API_KEY=your_key_here
-API_BASE_URL=https://api.cbbanalytics.com
-```
-
-Start the server:
-
-```bash
-python similarity_server.py
-```
-
-The server loads data for both Men's and Women's competitions at startup (~15–20 seconds) and runs on `http://localhost:5002`.
-
-### Frontend
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-## API Endpoints
-
-| Endpoint | Description |
-|---|---|
-| `GET /get_team_fit/<team_name>?gender=MALE` | Top 50 portal players for a team |
-| `GET /get_player_fit/<player_name>?gender=MALE` | Best team fits for a portal player |
-| `GET /get_player_overview/<name>?gender=MALE` | AI scouting report |
-| `GET /get_team_overview/<name>?gender=MALE` | AI program overview |
-| `GET /get_teams?gender=MALE` | All team names |
-| `GET /get_players?gender=MALE` | All portal player names |
-| `POST /chat` | Agentic analyst chat (`{message, history, gender}`) |
-
-=======
->>>>>>> d80ee7d6c5754259e5e12a2e45bfa7cc0c30ad3c
 ## NIL Model
 
 Trained on historical NIL deal data merged with per-game and advanced stats. Key decisions:
@@ -123,12 +72,3 @@ Each player-team match is scored across four dimensions:
 | Efficiency | Normalized eFG% (5th–95th percentile) | 20% |
 
 Weights are adjustable in the UI per search.
-<<<<<<< HEAD
-
-## Notes
-
-- `.env` and `nil_data.csv` are gitignored — you must supply your own credentials and training data to retrain the NIL models
-- Trained model artifacts (`.pkl`) are also gitignored; run the notebook to generate them before starting the backend
-- The backend must be running before the frontend will load any data
-=======
->>>>>>> d80ee7d6c5754259e5e12a2e45bfa7cc0c30ad3c
