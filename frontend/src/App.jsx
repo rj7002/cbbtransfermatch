@@ -33,6 +33,99 @@ function applyWeights(items, weights) {
     .sort((a, b) => b.FinalScore - a.FinalScore)
 }
 
+function BudgetFilter({ budget, onChange, max, filtered, total }) {
+  const step = Math.max(1000, Math.round(max / 100))
+  const [lo, hi] = budget ?? [0, max]
+  const isDefault = lo === 0 && hi === max
+
+  const leftPct  = (lo / max) * 100
+  const rightPct = (hi / max) * 100
+
+  function fmt(v) {
+    if (v >= 1_000_000) return `$${(v / 1_000_000).toFixed(1)}M`
+    if (v >= 1_000)     return `$${Math.round(v / 1_000)}K`
+    return `$${v}`
+  }
+
+  function setLo(v) {
+    const next = Math.min(Number(v), hi - step)
+    onChange([next, hi])
+  }
+  function setHi(v) {
+    const next = Math.max(Number(v), lo + step)
+    onChange(next >= max && lo === 0 ? null : [lo, next >= max ? max : next])
+  }
+
+  return (
+    <div className="budget-panel">
+      <div className="weights-header">
+        <span className="weights-title">NIL Budget</span>
+        <span className="budget-value">
+          {isDefault ? 'All ranges' : `${fmt(lo)} – ${hi >= max ? 'No limit' : fmt(hi)}`}
+        </span>
+        {!isDefault && (
+          <button className="weights-reset" onClick={() => onChange(null)}>Clear</button>
+        )}
+      </div>
+
+      <div className="dual-range">
+        <div
+          className="dual-range-track-fill"
+          style={{ left: `${leftPct}%`, width: `${rightPct - leftPct}%` }}
+        />
+        <input
+          type="range"
+          className="dual-range-input"
+          min={0} max={max} step={step}
+          value={lo}
+          onChange={e => setLo(e.target.value)}
+        />
+        <input
+          type="range"
+          className="dual-range-input"
+          min={0} max={max} step={step}
+          value={hi}
+          onChange={e => setHi(e.target.value)}
+        />
+      </div>
+
+      <div className="budget-labels">
+        <span>{fmt(0)}</span>
+        <span className="budget-count">{filtered} of {total} players</span>
+        <span>No limit</span>
+      </div>
+    </div>
+  )
+}
+
+function ChipFilter({ label, options, selected, onChange }) {
+  if (!options.length) return null
+  function toggle(val) {
+    onChange(selected.includes(val) ? selected.filter(v => v !== val) : [...selected, val])
+  }
+  return (
+    <div className="budget-panel">
+      <div className="weights-header">
+        <span className="weights-title">{label}</span>
+        {selected.length > 0 && (
+          <button className="weights-reset" onClick={() => onChange([])}>Clear</button>
+        )}
+      </div>
+      <div className="chip-group">
+        {options.map(opt => (
+          <button
+            key={opt}
+            className={`chip ${selected.includes(opt) ? 'chip--on' : ''}`}
+            onClick={() => toggle(opt)}
+          >
+            {opt}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function WeightsPanel({ weights, onChange }) {
   const total = Object.values(weights).reduce((a, b) => a + b, 0)
   const isDefault = JSON.stringify(weights) === JSON.stringify(DEFAULT_WEIGHTS)
@@ -94,22 +187,32 @@ function ScoreBar({ label, value }) {
   )
 }
 
-function DetailPanel({ item, mode, onClose }) {
+function DetailPanel({ item, mode, gender, onClose }) {
   const [overview, setOverview] = useState(null)
   const [overviewLoading, setOverviewLoading] = useState(false)
 
   const name = mode === 'team' ? item.Player : item.Team
 
   useEffect(() => {
-    if (mode !== 'team') return
-    setOverview(null)
-    setOverviewLoading(true)
-    fetch(`${API}/get_player_overview/${encodeURIComponent(name)}`)
-      .then(r => r.json())
-      .then(d => setOverview(d.overview || null))
-      .catch(() => setOverview(null))
-      .finally(() => setOverviewLoading(false))
-  }, [name, mode])
+    let cancelled = false
+    async function load() {
+      setOverview(null)
+      setOverviewLoading(true)
+      try {
+        const endpoint = mode === 'team'
+          ? `${API}/get_player_overview/${encodeURIComponent(name)}?gender=${gender}`
+          : `${API}/get_team_overview/${encodeURIComponent(name)}?gender=${gender}`
+        const d = await fetch(endpoint).then(r => r.json())
+        if (!cancelled) setOverview(d.overview || null)
+      } catch {
+        if (!cancelled) setOverview(null)
+      } finally {
+        if (!cancelled) setOverviewLoading(false)
+      }
+    }
+    load()
+    return () => { cancelled = true }
+  }, [name, mode, gender])
 
   const radarData = Object.entries(SCORE_LABELS).map(([key, label]) => ({
     subject: label,
@@ -123,17 +226,54 @@ function DetailPanel({ item, mode, onClose }) {
   return (
     <div className="detail-panel">
       <button className="detail-close" onClick={onClose}>✕</button>
-      <div className="detail-name">{name}</div>
-      {sub && <div className="detail-sub">{sub}</div>}
+
+      <div className="detail-hero">
+        {mode === 'team'
+          ? <PlayerAvatar teamId={item.PrevTeamId} playerId={item.PlayerId} name={item.Player} size="lg" />
+          : <TeamLogo teamId={item.TeamId} name={item.Team} size="lg" />
+        }
+        <div className="detail-hero-info">
+          <div className="detail-name">{name}</div>
+          {sub && <div className="detail-sub">{sub}</div>}
+        </div>
+      </div>
+
+      <div className="overview-box">
+        {overviewLoading
+          ? <div className="overview-loading"><div className="spinner spinner--sm" /><span>{mode === 'team' ? 'Generating scouting report...' : 'Generating program overview...'}</span></div>
+          : overview
+            ? <p className="overview-text">{overview}</p>
+            : null
+        }
+      </div>
+
+      {mode === 'player' && (
+        <div className="detail-stats">
+          <StatPill label="PPG"  value={item.ptsScoredPg} />
+          <StatPill label="ORtg" value={item.ortg} />
+          <StatPill label="DRtg" value={item.drtg} />
+          <StatPill label="Net"  value={item.netRtg} />
+          <StatPill label="Pace" value={item.pace} />
+          <StatPill label="eFG%" value={item.efgPct} isPercent />
+          <StatPill label="3P%"  value={item.fg3Pct}  isPercent />
+          <StatPill label="REB"  value={item.rebPg} />
+          <StatPill label="AST"  value={item.astPg} />
+          <StatPill label="TOV"  value={item.tovPg} />
+        </div>
+      )}
 
       {mode === 'team' && (
-        <div className="overview-box">
-          {overviewLoading
-            ? <div className="overview-loading"><div className="spinner spinner--sm" /><span>Generating scouting report...</span></div>
-            : overview
-              ? <p className="overview-text">{overview}</p>
-              : null
-          }
+        <div className="detail-stats">
+          <StatPill label="PTS"  value={item.ptsScoredPg} />
+          <StatPill label="REB"  value={item.rebPg} />
+          <StatPill label="AST"  value={item.astPg} />
+          <StatPill label="STL"  value={item.stlPg} />
+          <StatPill label="BLK"  value={item.blkPg} />
+          <StatPill label="TOV"  value={item.tovPg} />
+          <StatPill label="FG%"  value={item.fgPct}  isPercent />
+          <StatPill label="2P%"  value={item.fg2Pct} isPercent />
+          <StatPill label="3P%"  value={item.fg3Pct} isPercent />
+          <StatPill label="FT%"  value={item.ftPct}  isPercent />
         </div>
       )}
 
@@ -187,20 +327,22 @@ function DetailPanel({ item, mode, onClose }) {
 
 const IMG_BASE = 'https://storage.googleapis.com/cbb-image-files'
 
-function PlayerAvatar({ teamId, playerId, name }) {
+function PlayerAvatar({ teamId, playerId, name, size }) {
   const [err, setErr] = useState(false)
   const src = `${IMG_BASE}/player-headshots/${teamId}-${playerId}.png`
+  const cls = `avatar${size === 'lg' ? ' avatar--lg' : ''} avatar--fallback`
   return err
-    ? <div className="avatar avatar--fallback">{(name || '?')[0]}</div>
-    : <img className="avatar" src={src} alt={name} onError={() => setErr(true)} />
+    ? <div className={cls}>{(name || '?')[0]}</div>
+    : <img className={`avatar${size === 'lg' ? ' avatar--lg' : ''}`} src={src} alt={name} onError={() => setErr(true)} />
 }
 
-function TeamLogo({ teamId, name }) {
+function TeamLogo({ teamId, name, size }) {
   const [err, setErr] = useState(false)
   const src = `${IMG_BASE}/team-logos/${teamId}.png`
+  const cls = `avatar avatar--team${size === 'lg' ? ' avatar--lg' : ''} avatar--fallback`
   return err
-    ? <div className="avatar avatar--fallback avatar--team">{(name || '?')[0]}</div>
-    : <img className="avatar avatar--team" src={src} alt={name} onError={() => setErr(true)} />
+    ? <div className={cls}>{(name || '?')[0]}</div>
+    : <img className={`avatar avatar--team${size === 'lg' ? ' avatar--lg' : ''}`} src={src} alt={name} onError={() => setErr(true)} />
 }
 
 function StatPill({ label, value, isPercent }) {
@@ -225,9 +367,13 @@ function PlayerCard({ player, rank, selected, onClick }) {
           <div className="card-badges">
             {player.Position && <span className="badge">{player.Position}</span>}
             {player.Year && <span className="badge badge--dim">{player.Year}</span>}
+            {player.NilTier && <span className={`badge badge--nil badge--nil-${player.NilTier.split(' ')[0].toLowerCase()}`}>{player.NilTier}</span>}
           </div>
         </div>
-        <div className="card-sub">{player.PrevTeam}</div>
+        <div className="card-sub">
+          {player.PrevTeam}
+          {player.NilValue != null && <span className="nil-value">~${player.NilValue.toLocaleString()}</span>}
+        </div>
         <div className="stat-row">
           <StatPill label="PTS" value={player.ptsScoredPg} />
           <StatPill label="REB" value={player.rebPg} />
@@ -251,6 +397,9 @@ function PlayerCard({ player, rank, selected, onClick }) {
 }
 
 function TeamCard({ team, rank, selected, onClick }) {
+  const record = (team.overallWins != null && team.overallLosses != null)
+    ? `${team.overallWins}-${team.overallLosses}` : null
+
   return (
     <div className={`card ${selected ? 'card--active' : ''}`} onClick={() => onClick(team)}>
       <div className="card-rank">#{rank}</div>
@@ -258,19 +407,20 @@ function TeamCard({ team, rank, selected, onClick }) {
       <div className="card-body">
         <div className="card-top">
           <span className="card-name">{team.Team}</span>
-          {team.Conference && (
-            <div className="card-badges">
-              <span className="badge">{team.Conference}</span>
-            </div>
-          )}
-        </div>
-        {team.Explanation?.length > 0 && (
-          <div className="card-tags">
-            {team.Explanation.slice(0, 2).map((e, i) => (
-              <span key={i} className="tag tag--sm">{e}</span>
-            ))}
+          <div className="card-badges">
+            {team.Conference && <span className="badge badge--dim">{team.Conference}</span>}
+            {record && <span className="badge">{record}</span>}
+            {team.netRanking != null && <span className="badge badge--dim">NET #{team.netRanking}</span>}
           </div>
-        )}
+        </div>
+        <div className="card-stats">
+          <StatPill label="PPG"  value={team.ptsScoredPg} />
+          <StatPill label="ORtg" value={team.ortg} />
+          <StatPill label="DRtg" value={team.drtg} />
+          <StatPill label="Pace" value={team.pace} />
+          <StatPill label="eFG%" value={team.efgPct} isPercent />
+          <StatPill label="3P%"  value={team.fg3Pct}  isPercent />
+        </div>
       </div>
       <div className="card-score" style={{ color: scoreColor(team.FinalScore) }}>
         <span className="score-big">{Math.round(team.FinalScore * 100)}</span>
@@ -327,6 +477,7 @@ function Combobox({ options, value, onChange, onSelect, placeholder }) {
 }
 
 export default function App() {
+  const [gender, setGender] = useState('MALE')
   const [mode, setMode] = useState('team')
   const [teams, setTeams] = useState([])
   const [players, setPlayers] = useState([])
@@ -337,12 +488,37 @@ export default function App() {
   const [selected, setSelected] = useState(null)
   const [error, setError] = useState(null)
 
-  const results = rawResults.length > 0 ? applyWeights(rawResults, weights) : []
+  const [nilBudget, setNilBudget]       = useState(null) // null = no filter, or [lo, hi]
+  const [yearFilter, setYearFilter]     = useState([])
+  const [posFilter, setPosFilter]       = useState([])
+  const [confFilter, setConfFilter]     = useState([])
+
+  const allResults = rawResults.length > 0 ? applyWeights(rawResults, weights) : []
+
+  const results = allResults.filter(item => {
+    if (nilBudget != null && item.NilValue != null &&
+        (item.NilValue < nilBudget[0] || item.NilValue > nilBudget[1])) return false
+    if (yearFilter.length > 0 && !yearFilter.includes(item.Year)) return false
+    if (posFilter.length  > 0 && !posFilter.includes(item.Position)) return false
+    if (confFilter.length > 0 && !confFilter.includes(item.Conference)) return false
+    return true
+  })
 
   useEffect(() => {
-    fetch(`${API}/get_teams`).then(r => r.json()).then(setTeams).catch(() => {})
-    fetch(`${API}/get_players`).then(r => r.json()).then(setPlayers).catch(() => {})
-  }, [])
+    setQuery('')
+    setRawResults([])
+    setSelected(null)
+    setError(null)
+    fetch(`${API}/get_teams?gender=${gender}`).then(r => r.json()).then(setTeams).catch(() => {})
+    fetch(`${API}/get_players?gender=${gender}`).then(r => r.json()).then(setPlayers).catch(() => {})
+  }, [gender])
+
+  function clearFilters() {
+    setNilBudget(null)
+    setYearFilter([])
+    setPosFilter([])
+    setConfFilter([])
+  }
 
   function switchMode(m) {
     setMode(m)
@@ -350,6 +526,13 @@ export default function App() {
     setRawResults([])
     setSelected(null)
     setError(null)
+    clearFilters()
+  }
+
+  function switchGender(g) {
+    setGender(g)
+    setMode('team')
+    clearFilters()
   }
 
   async function handleSelect(val) {
@@ -359,8 +542,8 @@ export default function App() {
     setLoading(true)
     try {
       const url = mode === 'team'
-        ? `${API}/get_team_fit/${encodeURIComponent(val)}`
-        : `${API}/get_player_fit/${encodeURIComponent(val)}`
+        ? `${API}/get_team_fit/${encodeURIComponent(val)}?gender=${gender}`
+        : `${API}/get_player_fit/${encodeURIComponent(val)}?gender=${gender}`
       const data = await fetch(url).then(r => r.json())
       if (data.error) { setError(data.error); setRawResults([]) }
       else setRawResults(data.slice(0, 40))
@@ -379,6 +562,20 @@ export default function App() {
         <div className="header-inner">
           <div className="logo">
             <span className="logo-text">Portal<span className="logo-accent">Match</span></span>
+          </div>
+          <div className="gender-toggle">
+            <button
+              className={`gender-btn ${gender === 'MALE' ? 'gender-btn--on' : ''}`}
+              onClick={() => switchGender('MALE')}
+            >
+              Men's
+            </button>
+            <button
+              className={`gender-btn ${gender === 'FEMALE' ? 'gender-btn--on' : ''}`}
+              onClick={() => switchGender('FEMALE')}
+            >
+              Women's
+            </button>
           </div>
           <div className="mode-toggle">
             <button
@@ -441,6 +638,39 @@ export default function App() {
                 <span className="results-query">{query}</span>
               </div>
               <WeightsPanel weights={weights} onChange={setWeights} />
+              {mode === 'team' && allResults.some(r => r.NilValue != null) && (
+                <BudgetFilter
+                  budget={nilBudget}
+                  onChange={setNilBudget}
+                  max={Math.max(...allResults.map(r => r.NilValue ?? 0))}
+                  filtered={results.length}
+                  total={allResults.length}
+                />
+              )}
+              {mode === 'team' && (
+                <ChipFilter
+                  label="Class Year"
+                  options={[...new Set(allResults.map(r => r.Year).filter(Boolean))].sort()}
+                  selected={yearFilter}
+                  onChange={setYearFilter}
+                />
+              )}
+              {mode === 'team' && (
+                <ChipFilter
+                  label="Position"
+                  options={[...new Set(allResults.map(r => r.Position).filter(Boolean))].sort()}
+                  selected={posFilter}
+                  onChange={setPosFilter}
+                />
+              )}
+              {mode === 'player' && (
+                <ChipFilter
+                  label="Conference"
+                  options={[...new Set(allResults.map(r => r.Conference).filter(Boolean))].sort()}
+                  selected={confFilter}
+                  onChange={setConfFilter}
+                />
+              )}
               <div className="results-list">
                 {results.map((item, i) =>
                   mode === 'team'
@@ -464,18 +694,18 @@ export default function App() {
 
             {selected && (
               <div className="detail-col">
-                <DetailPanel item={selected} mode={mode} onClose={() => setSelected(null)} />
+                <DetailPanel item={selected} mode={mode} gender={gender} onClose={() => setSelected(null)} />
               </div>
             )}
           </div>
         )}
       </main>
-      <ChatPopup />
+      <ChatPopup gender={gender} />
     </div>
   )
 }
 
-function ChatPopup() {
+function ChatPopup({ gender }) {
   const [open, setOpen] = useState(false)
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState('')
@@ -504,6 +734,7 @@ function ChatPopup() {
         body: JSON.stringify({
           message: text,
           history: messages,
+          gender,
         }),
       }).then(r => r.json())
       setMessages([...next, { role: 'assistant', content: res.response || res.error || 'No response.' }])
