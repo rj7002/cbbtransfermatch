@@ -2,7 +2,7 @@
 title: CBB Transfer Match
 emoji: 🏀
 colorFrom: blue
-colorTo: orange
+colorTo: purple
 sdk: docker
 pinned: false
 ---
