@@ -317,6 +317,8 @@ def get_team_fit(team_id):
             **score
         })
 
+    if not results:
+        return jsonify([])
     df = pd.DataFrame(results).sort_values("FinalScore", ascending=False)
     return jsonify(df.head(50).to_dict(orient="records"))
 

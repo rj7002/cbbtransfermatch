@@ -523,10 +523,14 @@ export default function App() {
     setLoading(true)
     try {
       const url = buildFetchUrl(val, currentMode, currentGender, filters)
-      const data = await fetch(url).then(r => r.json())
+      console.log('[filter] fetching:', url)
+      const res = await fetch(url)
+      const data = await res.json()
+      console.log('[filter] response:', Array.isArray(data) ? `${data.length} results` : data)
       if (Array.isArray(data)) setRawResults(data)
-    } catch {}
-    finally { setLoading(false) }
+    } catch (e) {
+      console.error('[filter] error:', e)
+    } finally { setLoading(false) }
   }
 
   // Immediate refetch for chip clicks
