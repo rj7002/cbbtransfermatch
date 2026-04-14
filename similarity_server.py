@@ -124,9 +124,10 @@ def load_gender_data(gender: str):
     playerdf_f   = pd.concat([playerdf,    build_features(playerdf)],    axis=1)
     playerdf_all_f = pd.concat([playerdf_all, build_features(playerdf_all)], axis=1)
 
-    efg_series = playerdf_f.apply(_player_efg, axis=1)
-    efg_lo = float(efg_series.quantile(0.05))
-    efg_hi = float(efg_series.quantile(0.95))
+    # ts_series = playerdf_f.apply(_player_efg, axis=1)
+    ts_series = pd.to_numeric(playerdf_f["tsPct"], errors="coerce").fillna(0)
+    ts_lo = float(ts_series.quantile(0.05))
+    ts_hi = float(ts_series.quantile(0.95))
 
     print(f"[{gender}] competitionId={comp_id} | {len(playerdf_f)} portal players")
 
@@ -138,8 +139,8 @@ def load_gender_data(gender: str):
         "teamstatsdf":   teamstatsdf_offense,
         "playerdf":      playerdf_f,
         "playerdf_all":  playerdf_all_f,
-        "efg_lo":        efg_lo,
-        "efg_hi":        efg_hi,
+        "ts_lo":        ts_lo,
+        "ts_hi":        ts_hi,
         "comp_id":       comp_id,
     }
 
@@ -194,10 +195,10 @@ def build_features(df):
     row_sums = features.sum(axis=1).replace(0, 1)
     return features.div(row_sums, axis=0)
 
-def _player_efg(row):
-    two_share   = row["rim_freq"] + row["paint_freq"] + row["midrange_freq"]
-    three_share = row["corner3_freq"] + row["atb3_freq"] + row["deep3_freq"]
-    return row.get("fg2Pct", 0) * two_share + 1.5 * row.get("fg3Pct", 0) * three_share
+# def _player_efg(row):
+#     two_share   = row["rim_freq"] + row["paint_freq"] + row["midrange_freq"]
+#     three_share = row["corner3_freq"] + row["atb3_freq"] + row["deep3_freq"]
+#     return row.get("fg2Pct", 0) * two_share + 1.5 * row.get("fg3Pct", 0) * three_share
 
 # Load both genders at startup
 for _g in ("MALE", "FEMALE"):
@@ -376,7 +377,7 @@ def get_player_fit(player_id):
     d = _get_data(gender)
     teamdf, playerdf, playerdf_all = d["teamdf"], d["playerdf"], d["playerdf_all"]
     teamstatsdf = d["teamstatsdf"]
-    efg_lo, efg_hi = d["efg_lo"], d["efg_hi"]
+    ts_lo, ts_hi = d["ts_lo"], d["ts_hi"]
 
     player_row = playerdf[playerdf["fullName"] == player_id]
     if player_row.empty:
