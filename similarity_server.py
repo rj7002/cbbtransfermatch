@@ -249,7 +249,7 @@ def generate_explanation(player, gap, a):
 # -----------------------------
 # MATCH SCORE
 # -----------------------------
-def compute_match_score(player, team, efg_lo, efg_hi, precomputed_gap=None, playerdf_all=None):
+def compute_match_score(player, team, ts_lo, ts_hi, precomputed_gap=None, playerdf_all=None):
     a = np.nan_to_num(np.array(player[FINAL_FEATURES], dtype=np.float64))
     b = np.nan_to_num(np.array(team[FINAL_FEATURES], dtype=np.float64))
 
@@ -311,7 +311,7 @@ def get_team_fit(team_id):
     gender = body.get("gender", request.args.get("gender", "MALE")).upper()
     d = _get_data(gender)
     teamdf, playerdf, playerdf_all = d["teamdf"], d["playerdf"], d["playerdf_all"]
-    efg_lo, efg_hi = d["efg_lo"], d["efg_hi"]
+    ts_lo, ts_hi = d["ts_lo"], d["ts_hi"]
 
     team = teamdf[teamdf["fullName"] == team_id]
     if team.empty:
@@ -344,7 +344,7 @@ def get_team_fit(team_id):
 
     results = []
     for _, player in pool.iterrows():
-        score = compute_match_score(player, team, efg_lo, efg_hi, precomputed_gap=precomputed_gap)
+        score = compute_match_score(player, team, ts_lo, ts_hi, precomputed_gap=precomputed_gap)
         results.append({
             "Player": player["fullName"],
             "PlayerId": player["playerId"],
@@ -397,7 +397,7 @@ def get_player_fit(player_id):
 
     results = []
     for _, team in pool.iterrows():
-        score = compute_match_score(player, team, efg_lo, efg_hi, playerdf_all=playerdf_all)
+        score = compute_match_score(player, team, ts_lo, ts_hi, playerdf_all=playerdf_all)
 
         tid = team["teamId"]
         team_stats = {}
