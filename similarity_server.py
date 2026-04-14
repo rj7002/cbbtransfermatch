@@ -269,9 +269,15 @@ def compute_match_score(player, team, ts_lo, ts_hi, precomputed_gap=None, player
     three_share = a_p[3] + a_p[4] + a_p[5]
     # efg = player.get("fg2Pct", 0) * two_share + 1.5 * player.get("fg3Pct", 0) * three_share
     # efficiency = float(np.clip((efg - efg_lo) / (efg_hi - efg_lo + 1e-9), 0, 1))
-    eff_raw = player.get("tsPct", 0) + 0.3 * player.get("ortgPlayer", 0) / 100
-    efficiency = (eff_raw - ts_lo) / (ts_hi - ts_lo + 1e-9)
-    efficiency = float(np.clip(efficiency, 0, 1))
+    # eff_raw = player.get("tsPct", 0) + 0.3 * player.get("ortgPlayer", 0) / 100
+    # efficiency = (eff_raw - ts_lo) / (ts_hi - ts_lo + 1e-9)
+    # efficiency = float(np.clip(efficiency, 0, 1))
+    ts_series = _data[gender]["playerdf"]["tsPct"].fillna(0)
+
+    eff_raw = float(player.get("tsPct", 0))
+
+    # percentile-based efficiency (0 to 1)
+    efficiency = float((ts_series < eff_raw).mean())
 
     if precomputed_gap is not None:
         gap = precomputed_gap
