@@ -276,8 +276,12 @@ def compute_match_score(player, team, ts_lo, ts_hi, ts_series,precomputed_gap=No
     # efficiency = float(np.clip(efficiency, 0, 1))
     eff_raw = float(player.get("tsPct", 0))
 
-    # percentile-based efficiency (0 to 1)
-    efficiency = float((ts_series < eff_raw).mean())
+    base_rank = pd.Series(ts_series).rank(method="first")  # guarantees no ties
+    
+    efficiency = float(base_rank.loc[ts_series[ts_series == eff_raw].index[0]])
+    
+    # normalize to 0–1
+    efficiency = efficiency / len(ts_series)
 
     if precomputed_gap is not None:
         gap = precomputed_gap
