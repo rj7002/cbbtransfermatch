@@ -9,16 +9,16 @@ const API = import.meta.env.VITE_API_URL || 'http://localhost:5002'
 
 const SCORE_LABELS = {
   ShotFit: 'Shot Fit',
-  OpportunityFit: 'Opportunity',
+  // OpportunityFit: 'Opportunity',
   GapFit: 'Gap Fill',
   Efficiency: 'Efficiency',
 }
 
 const DEFAULT_WEIGHTS = {
-  ShotFit: 35,
-  OpportunityFit: 25,
-  GapFit: 20,
-  Efficiency: 20,
+  ShotFit: 45,
+  // OpportunityFit: 25,
+  GapFit: 25,
+  Efficiency: 30,
 }
 
 function applyWeights(items, weights) {
@@ -149,7 +149,7 @@ function WeightsPanel({ weights, onChange }) {
           <input
             type="range"
             min={0}
-            max={60}
+            max={100}
             step={5}
             value={weights[key]}
             className="weight-slider"
@@ -821,7 +821,7 @@ function ChatPopup({ gender }) {
         <div className="chat-popup">
           <div className="chat-header">
             <span className="chat-title">CBB Analyst</span>
-            <span className="chat-subtitle">Powered by Gemini</span>
+            <span className="chat-subtitle">Powered by Mistral AI</span>
           </div>
 
           <div className="chat-messages">
