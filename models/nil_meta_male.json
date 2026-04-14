@@ -1,0 +1,41 @@
+{
+  "features": [
+    "minsPg",
+    "rapm",
+    "ptsScoredPg",
+    "fgaPg",
+    "drapm",
+    "orapm",
+    "dwsP40",
+    "owsP40",
+    "wsP40",
+    "warpP40"
+  ],
+  "nil_low_threshold": 200480.00000000003,
+  "nil_high_threshold": 1000000.0,
+  "conf_tier_top": [
+    17,
+    29,
+    30,
+    53,
+    60,
+    61,
+    73,
+    74,
+    87,
+    89
+  ],
+  "conf_tier_mid": [
+    1,
+    4,
+    16,
+    36,
+    37,
+    38,
+    40,
+    54,
+    62,
+    86,
+    88
+  ]
+}

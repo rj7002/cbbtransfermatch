@@ -1,0 +1,11 @@
+flask==3.1.3
+flask-cors==6.0.2
+pandas==2.2.3
+numpy==2.4.3
+scikit-learn==1.8.0
+requests==2.32.5
+google-genai==1.72.0
+python-dotenv==1.2.2
+joblib==1.5.3
+lightgbm==4.6.0
+gunicorn

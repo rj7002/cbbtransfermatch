@@ -1,0 +1,1 @@
+web: gunicorn similarity_server:app
