@@ -262,12 +262,15 @@ def compute_match_score(player, team, efg_lo, efg_hi, precomputed_gap=None, play
     b_p = b / (np.sum(b) + 1e-9)
 
     shot_fit = float(cosine_similarity(a_shot.reshape(1, -1), b_shot.reshape(1, -1))[0][0])
-    opportunity_fit = float(np.sum(np.minimum(a_p, b_p)))
+    # opportunity_fit = float(np.sum(np.minimum(a_p, b_p)))
 
     two_share   = a_p[0] + a_p[1] + a_p[2]
     three_share = a_p[3] + a_p[4] + a_p[5]
-    efg = player.get("fg2Pct", 0) * two_share + 1.5 * player.get("fg3Pct", 0) * three_share
-    efficiency = float(np.clip((efg - efg_lo) / (efg_hi - efg_lo + 1e-9), 0, 1))
+    # efg = player.get("fg2Pct", 0) * two_share + 1.5 * player.get("fg3Pct", 0) * three_share
+    # efficiency = float(np.clip((efg - efg_lo) / (efg_hi - efg_lo + 1e-9), 0, 1))
+    eff_raw = player.get("tsPct", 0) + 0.3 * player.get("ortgPlayer", 0) / 100
+    efficiency = (eff_raw - ts_lo) / (ts_hi - ts_lo + 1e-9)
+    efficiency = float(np.clip(efficiency, 0, 1))
 
     if precomputed_gap is not None:
         gap = precomputed_gap
@@ -282,12 +285,13 @@ def compute_match_score(player, team, efg_lo, efg_hi, precomputed_gap=None, play
         gap_p = gap / (np.sum(gap) + 1e-9)
         gap_fit = float(cosine_similarity(a_p.reshape(1, -1), gap_p.reshape(1, -1))[0][0])
 
-    final = 0.35 * shot_fit + 0.25 * opportunity_fit + 0.20 * gap_fit + 0.20 * efficiency
+    # final = 0.35 * shot_fit + 0.25 * opportunity_fit + 0.20 * gap_fit + 0.20 * efficiency
+    final = 0.45 * shot_fit + 0.25 * gap_fit + 0.30 * efficiency
 
     return {
         "FinalScore":      float(final),
         "ShotFit":         shot_fit,
-        "OpportunityFit":  opportunity_fit,
+        # "OpportunityFit":  opportunity_fit,
         "GapFit":          gap_fit,
         "Efficiency":      efficiency,
         "Explanation":     generate_explanation(player, gap, a_p),
