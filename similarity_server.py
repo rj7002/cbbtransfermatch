@@ -152,6 +152,31 @@ def _get_data(gender: str) -> dict:
 # -----------------------------
 # FEATURES
 # -----------------------------
+
+shot_features = ['nba3FgaFreq',
+ 'lane2FgaFreq',
+ 'atr2FgaFreq',
+ 'paint2FgaFreq',
+ 'mid2FgaFreq',
+ 'c3FgaFreq',
+ 'atb3FgaFreq',
+ 'lb2FgaFreq',
+ 'rb2FgaFreq',
+ 'le2FgaFreq',
+ 're2FgaFreq',
+ 'lc3FgaFreq',
+ 'rc3FgaFreq',
+ 'lw3FgaFreq',
+ 'rw3FgaFreq',
+ 'tok3FgaFreq',
+ 'med2FgaFreq',
+ 'lng2FgaFreq',
+ 'sht3FgaFreq',
+ 'lng3FgaFreq',
+  'fgaFreqAllS01',
+ 'fgaFreqAllS12',
+ 'fgaFreqAllS23']
+
 FINAL_FEATURES = [
     "rim_freq", "paint_freq", "midrange_freq",
     "corner3_freq", "atb3_freq", "deep3_freq"
@@ -227,13 +252,16 @@ def compute_match_score(player, team, efg_lo, efg_hi, precomputed_gap=None, play
     a = np.nan_to_num(np.array(player[FINAL_FEATURES], dtype=np.float64))
     b = np.nan_to_num(np.array(team[FINAL_FEATURES], dtype=np.float64))
 
+    a_shot = np.nan_to_num(np.array(player[shot_features], dtype=np.float64))
+    b_shot = np.nan_to_num(np.array(team[shot_features], dtype=np.float64)) 
+    
     if np.sum(a) == 0 or np.sum(b) == 0:
         return {"FinalScore": 0}
 
     a_p = a / (np.sum(a) + 1e-9)
     b_p = b / (np.sum(b) + 1e-9)
 
-    shot_fit = float(cosine_similarity(a_p.reshape(1, -1), b_p.reshape(1, -1))[0][0])
+    shot_fit = float(cosine_similarity(a_shot.reshape(1, -1), b_shot.reshape(1, -1))[0][0])
     opportunity_fit = float(np.sum(np.minimum(a_p, b_p)))
 
     two_share   = a_p[0] + a_p[1] + a_p[2]
