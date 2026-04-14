@@ -10,14 +10,14 @@ import requests
 import json
 from sklearn.metrics.pairwise import cosine_similarity
 from flask_cors import CORS
-from google import genai
-from google.genai import types as genai_types
+from mistralai.client import Mistral
 import joblib
 app = Flask(__name__)
 CORS(app)
 
-gemini = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-GEMINI_MODEL = "models/gemini-3.1-flash-lite-preview"
+mistral = Mistral(api_key=os.getenv("MISTRAL_API_KEY"))
+MISTRAL_MODEL = "mistral-small-2603"
+
 _overview_cache = {}
 
 STAT_COLS = ["ptsScoredPg", "astPg", "rebPg", "blkPg", "stlPg", "tovPg",
@@ -124,9 +124,10 @@ def load_gender_data(gender: str):
     playerdf_f   = pd.concat([playerdf,    build_features(playerdf)],    axis=1)
     playerdf_all_f = pd.concat([playerdf_all, build_features(playerdf_all)], axis=1)
 
-    efg_series = playerdf_f.apply(_player_efg, axis=1)
-    efg_lo = float(efg_series.quantile(0.05))
-    efg_hi = float(efg_series.quantile(0.95))
+    # ts_series = playerdf_f.apply(_player_efg, axis=1)
+    ts_series = pd.to_numeric(playerdf_f["tsPct"], errors="coerce").fillna(0)
+    ts_lo = float(ts_series.quantile(0.05))
+    ts_hi = float(ts_series.quantile(0.95))
 
     print(f"[{gender}] competitionId={comp_id} | {len(playerdf_f)} portal players")
 
@@ -138,9 +139,10 @@ def load_gender_data(gender: str):
         "teamstatsdf":   teamstatsdf_offense,
         "playerdf":      playerdf_f,
         "playerdf_all":  playerdf_all_f,
-        "efg_lo":        efg_lo,
-        "efg_hi":        efg_hi,
+        "ts_lo":        ts_lo,
+        "ts_hi":        ts_hi,
         "comp_id":       comp_id,
+        "ts_series" : ts_series
     }
 
 def _get_data(gender: str) -> dict:
@@ -152,6 +154,31 @@ def _get_data(gender: str) -> dict:
 # -----------------------------
 # FEATURES
 # -----------------------------
+
+shot_features = ['nba3FgaFreq',
+ 'lane2FgaFreq',
+ 'atr2FgaFreq',
+ 'paint2FgaFreq',
+ 'mid2FgaFreq',
+ 'c3FgaFreq',
+ 'atb3FgaFreq',
+ 'lb2FgaFreq',
+ 'rb2FgaFreq',
+ 'le2FgaFreq',
+ 're2FgaFreq',
+ 'lc3FgaFreq',
+ 'rc3FgaFreq',
+ 'lw3FgaFreq',
+ 'rw3FgaFreq',
+ 'tok3FgaFreq',
+ 'med2FgaFreq',
+ 'lng2FgaFreq',
+ 'sht3FgaFreq',
+ 'lng3FgaFreq',
+  'fgaFreqAllS01',
+ 'fgaFreqAllS12',
+ 'fgaFreqAllS23']
+
 FINAL_FEATURES = [
     "rim_freq", "paint_freq", "midrange_freq",
     "corner3_freq", "atb3_freq", "deep3_freq"
@@ -169,10 +196,10 @@ def build_features(df):
     row_sums = features.sum(axis=1).replace(0, 1)
     return features.div(row_sums, axis=0)
 
-def _player_efg(row):
-    two_share   = row["rim_freq"] + row["paint_freq"] + row["midrange_freq"]
-    three_share = row["corner3_freq"] + row["atb3_freq"] + row["deep3_freq"]
-    return row.get("fg2Pct", 0) * two_share + 1.5 * row.get("fg3Pct", 0) * three_share
+# def _player_efg(row):
+#     two_share   = row["rim_freq"] + row["paint_freq"] + row["midrange_freq"]
+#     three_share = row["corner3_freq"] + row["atb3_freq"] + row["deep3_freq"]
+#     return row.get("fg2Pct", 0) * two_share + 1.5 * row.get("fg3Pct", 0) * three_share
 
 # Load both genders at startup
 for _g in ("MALE", "FEMALE"):
@@ -182,9 +209,10 @@ for _g in ("MALE", "FEMALE"):
 # GAP PROFILE (PORTAL + SENIORS)
 # -----------------------------
 def compute_team_gap_profile(team, playerdf_all):
-    in_portal = playerdf_all.get("inPortalAfterSeason", False)
-    if isinstance(in_portal, bool):
-        in_portal = pd.Series(False, index=playerdf_all.index)
+    # in_portal = playerdf_all.get("inPortalAfterSeason", False)
+    # if isinstance(in_portal, bool):
+    #     in_portal = pd.Series(False, index=playerdf_all.index)
+    in_portal = playerdf_all.get("inPortalAfterSeason", pd.Series(False, index=playerdf_all.index)).fillna(False)
 
     is_senior = playerdf_all["classYr"].astype(str).str.lower().str.contains("senior")
 
@@ -223,23 +251,37 @@ def generate_explanation(player, gap, a):
 # -----------------------------
 # MATCH SCORE
 # -----------------------------
-def compute_match_score(player, team, efg_lo, efg_hi, precomputed_gap=None, playerdf_all=None):
+def compute_match_score(player, team, ts_lo, ts_hi, ts_series,precomputed_gap=None, playerdf_all=None):
     a = np.nan_to_num(np.array(player[FINAL_FEATURES], dtype=np.float64))
     b = np.nan_to_num(np.array(team[FINAL_FEATURES], dtype=np.float64))
 
+    a_shot = np.nan_to_num(np.array(player[shot_features], dtype=np.float64))
+    b_shot = np.nan_to_num(np.array(team[shot_features], dtype=np.float64)) 
+    
     if np.sum(a) == 0 or np.sum(b) == 0:
         return {"FinalScore": 0}
 
     a_p = a / (np.sum(a) + 1e-9)
     b_p = b / (np.sum(b) + 1e-9)
 
-    shot_fit = float(cosine_similarity(a_p.reshape(1, -1), b_p.reshape(1, -1))[0][0])
-    opportunity_fit = float(np.sum(np.minimum(a_p, b_p)))
+    shot_fit = float(cosine_similarity(a_shot.reshape(1, -1), b_shot.reshape(1, -1))[0][0])
+    # opportunity_fit = float(np.sum(np.minimum(a_p, b_p)))
 
     two_share   = a_p[0] + a_p[1] + a_p[2]
     three_share = a_p[3] + a_p[4] + a_p[5]
-    efg = player.get("fg2Pct", 0) * two_share + 1.5 * player.get("fg3Pct", 0) * three_share
-    efficiency = float(np.clip((efg - efg_lo) / (efg_hi - efg_lo + 1e-9), 0, 1))
+    # efg = player.get("fg2Pct", 0) * two_share + 1.5 * player.get("fg3Pct", 0) * three_share
+    # efficiency = float(np.clip((efg - efg_lo) / (efg_hi - efg_lo + 1e-9), 0, 1))
+    # eff_raw = player.get("tsPct", 0) + 0.3 * player.get("ortgPlayer", 0) / 100
+    # efficiency = (eff_raw - ts_lo) / (ts_hi - ts_lo + 1e-9)
+    # efficiency = float(np.clip(efficiency, 0, 1))
+    eff_raw = float(player.get("tsPct", 0))
+
+    base_rank = pd.Series(ts_series).rank(method="first")  # guarantees no ties
+    
+    efficiency = float(base_rank.loc[ts_series[ts_series == eff_raw].index[0]])
+    
+    # normalize to 0–1
+    efficiency = efficiency / len(ts_series)
 
     if precomputed_gap is not None:
         gap = precomputed_gap
@@ -254,12 +296,13 @@ def compute_match_score(player, team, efg_lo, efg_hi, precomputed_gap=None, play
         gap_p = gap / (np.sum(gap) + 1e-9)
         gap_fit = float(cosine_similarity(a_p.reshape(1, -1), gap_p.reshape(1, -1))[0][0])
 
-    final = 0.35 * shot_fit + 0.25 * opportunity_fit + 0.20 * gap_fit + 0.20 * efficiency
+    # final = 0.35 * shot_fit + 0.25 * opportunity_fit + 0.20 * gap_fit + 0.20 * efficiency
+    final = 0.45 * shot_fit + 0.25 * gap_fit + 0.30 * efficiency
 
     return {
         "FinalScore":      float(final),
         "ShotFit":         shot_fit,
-        "OpportunityFit":  opportunity_fit,
+        # "OpportunityFit":  opportunity_fit,
         "GapFit":          gap_fit,
         "Efficiency":      efficiency,
         "Explanation":     generate_explanation(player, gap, a_p),
@@ -278,7 +321,7 @@ def get_team_fit(team_id):
     gender = body.get("gender", request.args.get("gender", "MALE")).upper()
     d = _get_data(gender)
     teamdf, playerdf, playerdf_all = d["teamdf"], d["playerdf"], d["playerdf_all"]
-    efg_lo, efg_hi = d["efg_lo"], d["efg_hi"]
+    ts_lo, ts_hi = d["ts_lo"], d["ts_hi"]
 
     team = teamdf[teamdf["fullName"] == team_id]
     if team.empty:
@@ -286,6 +329,7 @@ def get_team_fit(team_id):
 
     team = team.iloc[0]
     precomputed_gap = compute_team_gap_profile(team, playerdf_all)
+    ts_series = d["ts_series"]
 
     # Read filters from POST body OR query params
     nil_min = body.get("nil_min") or (request.args.get("nil_min") and int(request.args.get("nil_min")))
@@ -311,7 +355,7 @@ def get_team_fit(team_id):
 
     results = []
     for _, player in pool.iterrows():
-        score = compute_match_score(player, team, efg_lo, efg_hi, precomputed_gap=precomputed_gap)
+        score = compute_match_score(player, team, ts_lo, ts_hi, ts_series,precomputed_gap=precomputed_gap)
         results.append({
             "Player": player["fullName"],
             "PlayerId": player["playerId"],
@@ -328,7 +372,9 @@ def get_team_fit(team_id):
     if not results:
         return jsonify([])
     df = pd.DataFrame(results).sort_values("FinalScore", ascending=False)
-    return jsonify(df.head(50).to_dict(orient="records"))
+    # return jsonify(df.head(50).to_dict(orient="records"))
+    top = df.head(25)
+    return jsonify(top.where(top.notna(), other=None).to_dict(orient="records"))
 
 # -----------------------------
 # PLAYER FIT
@@ -344,7 +390,9 @@ def get_player_fit(player_id):
     d = _get_data(gender)
     teamdf, playerdf, playerdf_all = d["teamdf"], d["playerdf"], d["playerdf_all"]
     teamstatsdf = d["teamstatsdf"]
-    efg_lo, efg_hi = d["efg_lo"], d["efg_hi"]
+    ts_lo, ts_hi = d["ts_lo"], d["ts_hi"]
+    ts_series = d["ts_series"]
+
 
     player_row = playerdf[playerdf["fullName"] == player_id]
     if player_row.empty:
@@ -364,7 +412,7 @@ def get_player_fit(player_id):
 
     results = []
     for _, team in pool.iterrows():
-        score = compute_match_score(player, team, efg_lo, efg_hi, playerdf_all=playerdf_all)
+        score = compute_match_score(player, team, ts_lo, ts_hi, ts_series,playerdf_all=playerdf_all)
 
         tid = team["teamId"]
         team_stats = {}
@@ -383,7 +431,8 @@ def get_player_fit(player_id):
         })
 
     df = pd.DataFrame(results).sort_values("FinalScore", ascending=False)
-    return jsonify(df.to_dict(orient="records"))
+    # return jsonify(df.to_dict(orient="records"))
+    return jsonify(df.where(df.notna(), other=None).to_dict(orient="records"))
 
 # -----------------------------
 # TEAM NEEDS
@@ -434,7 +483,7 @@ def get_player_overview(player_name):
         for f in FINAL_FEATURES
     )
 
-    prompt = f"""You are a college basketball analyst. Write a 3-4 sentence scouting report for this transfer portal player. Be specific, analytical, and direct. No fluff.
+    prompt = f"""You are an expert college basketball analyst. Write a 3-4 sentence scouting report for this transfer portal player. Be specific, analytical, and direct. No fluff.
 
 Player: {p['fullName']}
 Position: {p.get('position','N/A')} | Year: {p.get('classYr','N/A')} | Previous team: {p.get('teamFullName','N/A')}
@@ -443,11 +492,15 @@ Per-game stats: {fmt(p.get('ptsScoredPg'))} pts, {fmt(p.get('rebPg'))} reb, {fmt
 Shooting: FG {fmt(p.get('fgPct'), pct=True)}, 2P {fmt(p.get('fg2Pct'), pct=True)}, 3P {fmt(p.get('fg3Pct'), pct=True)}, FT {fmt(p.get('ftPct'), pct=True)}
 Shot profile (% of FGA): {shot_profile}
 
+Do not add a title just give the scouting report.
 Write the scouting report now:"""
 
     try:
-        response = gemini.models.generate_content(model=GEMINI_MODEL, contents=prompt)
-        overview = response.text.strip()
+        response = mistral.chat.complete(
+            model=MISTRAL_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        overview = response.choices[0].message.content.strip()
         _overview_cache[cache_key] = overview
         return jsonify({"overview": overview})
     except Exception as e:
@@ -477,7 +530,7 @@ def get_team_overview(team_name):
     record    = f"{int(t.get('overallWins', 0))}-{int(t.get('overallLosses', 0))}"
     conf_rec  = f"{int(t.get('confWins', 0))}-{int(t.get('confLosses', 0))}"
 
-    prompt = f"""You are a college basketball analyst. Write a 3-4 sentence program overview for a coaching staff evaluating transfer portal targets. Focus on the team's offensive identity, defensive profile, and what type of player would thrive here. Be specific and analytical. No fluff.
+    prompt = f"""You are an expert college basketball analyst. Write a 3-4 sentence program overview for a player who is considering transferring to the program. Focus on the team's offensive identity, defensive profile, and overall playstyle. Be specific and analytical. No fluff.
 
 Team: {t['fullName']}
 Record: {record} overall, {conf_rec} conference | NET Ranking: {t.get('netRanking', 'N/A')}
@@ -487,11 +540,15 @@ Defense: {fmt(t.get('drtg'))} DRtg | {fmt(t.get('efgPctAgst'), pct=True)} opp eF
 Rebounding: {fmt(t.get('orbPct'), pct=True)} ORB% | {fmt(t.get('drbPct'), pct=True)} DRB%
 Adjusted: {fmt(t.get('ortgAdj'))} adj ORtg | {fmt(t.get('drtgAdj'))} adj DRtg | {fmt(t.get('netRtgAdj'))} adj net
 
+Do not add a title just give the overview.
 Write the program overview now:"""
 
     try:
-        response = gemini.models.generate_content(model=GEMINI_MODEL, contents=prompt)
-        overview = response.text.strip()
+        response = mistral.chat.complete(
+            model=MISTRAL_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        overview = response.choices[0].message.content.strip()
         _overview_cache[cache_key] = overview
         return jsonify({"overview": overview})
     except Exception as e:
@@ -597,49 +654,73 @@ def _make_tool_fns(gender: str):
         "get_player_game_log":     lambda **kw: _get_player_game_log(gender=gender, **kw),
     }
 
-_AGENT_TOOLS = genai_types.Tool(function_declarations=[
-    genai_types.FunctionDeclaration(
-        name="get_team_stats",
-        description="Get season shot profile for a team. Use partial name e.g. 'Maryland'.",
-        parameters=genai_types.Schema(type=genai_types.Type.OBJECT,
-            properties={"team_name": genai_types.Schema(type=genai_types.Type.STRING)},
-            required=["team_name"]),
-    ),
-    genai_types.FunctionDeclaration(
-        name="get_player_season_stats",
-        description="Get per-game stats and shooting splits for a player. Use partial name.",
-        parameters=genai_types.Schema(type=genai_types.Type.OBJECT,
-            properties={"player_name": genai_types.Schema(type=genai_types.Type.STRING)},
-            required=["player_name"]),
-    ),
-    genai_types.FunctionDeclaration(
-        name="get_player_pbp_stats",
-        description="Get shot zone frequencies and PBP-derived stats for a player.",
-        parameters=genai_types.Schema(type=genai_types.Type.OBJECT,
-            properties={"player_name": genai_types.Schema(type=genai_types.Type.STRING)},
-            required=["player_name"]),
-    ),
-    genai_types.FunctionDeclaration(
-        name="get_team_game_log",
-        description="Get recent team game results for a conference. Default conference_id 53 = Big Ten.",
-        parameters=genai_types.Schema(type=genai_types.Type.OBJECT,
-            properties={"conference_id": genai_types.Schema(type=genai_types.Type.STRING)},
-            required=[]),
-    ),
-    genai_types.FunctionDeclaration(
-        name="get_player_game_log",
-        description="Get individual game-by-game stats for a player by name.",
-        parameters=genai_types.Schema(type=genai_types.Type.OBJECT,
-            properties={"player_name": genai_types.Schema(type=genai_types.Type.STRING)},
-            required=["player_name"]),
-    ),
-])
+_AGENT_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_team_stats",
+            "description": "Get season shot profile for a team. Use partial name e.g. 'Maryland'.",
+            "parameters": {
+                "type": "object",
+                "properties": {"team_name": {"type": "string"}},
+                "required": ["team_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_player_season_stats",
+            "description": "Get per-game stats and shooting splits for a player. Use partial name.",
+            "parameters": {
+                "type": "object",
+                "properties": {"player_name": {"type": "string"}},
+                "required": ["player_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_player_pbp_stats",
+            "description": "Get shot zone frequencies and PBP-derived stats for a player.",
+            "parameters": {
+                "type": "object",
+                "properties": {"player_name": {"type": "string"}},
+                "required": ["player_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_team_game_log",
+            "description": "Get recent team game results for a conference. Default conference_id 53 = Big Ten.",
+            "parameters": {
+                "type": "object",
+                "properties": {"conference_id": {"type": "string"}},
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_player_game_log",
+            "description": "Get individual game-by-game stats for a player by name.",
+            "parameters": {
+                "type": "object",
+                "properties": {"player_name": {"type": "string"}},
+                "required": ["player_name"],
+            },
+        },
+    },
+]
 
 _AGENT_SYSTEM = (
     "You are an expert college basketball analyst with access to real current season data. "
     "Use tools to look up data before answering. Be concise, specific, and analytical."
 )
-AGENT_MODEL = GEMINI_MODEL  # reuse same model as overview
 
 @app.route("/chat", methods=["POST"])
 def chat():
@@ -652,46 +733,42 @@ def chat():
 
     tool_fns = _make_tool_fns(gender)
 
-    # Build conversation history for Gemini
-    contents = []
+    # Build conversation history for Mistral
+    messages = [{"role": "system", "content": _AGENT_SYSTEM}]
     for msg in history_raw:
-        role = "user" if msg["role"] == "user" else "model"
-        contents.append(genai_types.Content(role=role, parts=[genai_types.Part(text=msg["content"])]))
-    contents.append(genai_types.Content(role="user", parts=[genai_types.Part(text=user_message)]))
-
-    config = genai_types.GenerateContentConfig(
-        system_instruction=_AGENT_SYSTEM,
-        tools=[_AGENT_TOOLS],
-        temperature=0.2,
-    )
+        role = "user" if msg["role"] == "user" else "assistant"
+        messages.append({"role": role, "content": msg["content"]})
+    messages.append({"role": "user", "content": user_message})
 
     try:
         # Agentic loop: up to 4 tool-call rounds
         for _ in range(4):
-            response = gemini.models.generate_content(model=AGENT_MODEL, contents=contents, config=config)
-            candidate = response.candidates[0].content
+            response = mistral.chat.complete(
+                model=MISTRAL_MODEL,
+                messages=messages,
+                tools=_AGENT_TOOLS,
+                tool_choice="auto",
+                temperature=0.2,
+            )
+            assistant_msg = response.choices[0].message
 
-            # Check for tool calls
-            tool_calls = [p for p in candidate.parts if p.function_call is not None]
-            if not tool_calls:
-                # Final text response
-                text = "".join(p.text for p in candidate.parts if p.text)
-                return jsonify({"response": text})
+            if not assistant_msg.tool_calls:
+                return jsonify({"response": assistant_msg.content})
 
-            # Execute all tool calls and append results
-            contents.append(candidate)
-            result_parts = []
-            for part in tool_calls:
-                fn = tool_fns.get(part.function_call.name)
-                args = dict(part.function_call.args) if part.function_call.args else {}
-                tool_result = fn(**args) if fn else f"Unknown tool: {part.function_call.name}"
-                result_parts.append(genai_types.Part(
-                    function_response=genai_types.FunctionResponse(
-                        name=part.function_call.name,
-                        response={"result": tool_result},
-                    )
-                ))
-            contents.append(genai_types.Content(role="user", parts=result_parts))
+            # Append assistant message with tool calls
+            messages.append({"role": "assistant", "content": assistant_msg.content, "tool_calls": assistant_msg.tool_calls})
+
+            # Execute each tool call and append results
+            for tc in assistant_msg.tool_calls:
+                fn = tool_fns.get(tc.function.name)
+                args = json.loads(tc.function.arguments) if isinstance(tc.function.arguments, str) else tc.function.arguments
+                tool_result = fn(**args) if fn else f"Unknown tool: {tc.function.name}"
+                messages.append({
+                    "role": "tool",
+                    "name": tc.function.name,
+                    "content": tool_result,
+                    "tool_call_id": tc.id,
+                })
 
         return jsonify({"response": "Max tool iterations reached."})
     except Exception as e:
