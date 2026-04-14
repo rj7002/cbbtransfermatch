@@ -142,6 +142,7 @@ def load_gender_data(gender: str):
         "ts_lo":        ts_lo,
         "ts_hi":        ts_hi,
         "comp_id":       comp_id,
+        "ts_series" : ts_series
     }
 
 def _get_data(gender: str) -> dict:
@@ -208,9 +209,10 @@ for _g in ("MALE", "FEMALE"):
 # GAP PROFILE (PORTAL + SENIORS)
 # -----------------------------
 def compute_team_gap_profile(team, playerdf_all):
-    in_portal = playerdf_all.get("inPortalAfterSeason", False)
-    if isinstance(in_portal, bool):
-        in_portal = pd.Series(False, index=playerdf_all.index)
+    # in_portal = playerdf_all.get("inPortalAfterSeason", False)
+    # if isinstance(in_portal, bool):
+    #     in_portal = pd.Series(False, index=playerdf_all.index)
+    in_portal = playerdf_all.get("inPortalAfterSeason", pd.Series(False, index=playerdf_all.index)).fillna(False)
 
     is_senior = playerdf_all["classYr"].astype(str).str.lower().str.contains("senior")
 
@@ -249,7 +251,7 @@ def generate_explanation(player, gap, a):
 # -----------------------------
 # MATCH SCORE
 # -----------------------------
-def compute_match_score(player, team, ts_lo, ts_hi, precomputed_gap=None, playerdf_all=None):
+def compute_match_score(player, team, ts_lo, ts_hi, ts_series,precomputed_gap=None, playerdf_all=None):
     a = np.nan_to_num(np.array(player[FINAL_FEATURES], dtype=np.float64))
     b = np.nan_to_num(np.array(team[FINAL_FEATURES], dtype=np.float64))
 
@@ -272,8 +274,6 @@ def compute_match_score(player, team, ts_lo, ts_hi, precomputed_gap=None, player
     # eff_raw = player.get("tsPct", 0) + 0.3 * player.get("ortgPlayer", 0) / 100
     # efficiency = (eff_raw - ts_lo) / (ts_hi - ts_lo + 1e-9)
     # efficiency = float(np.clip(efficiency, 0, 1))
-    ts_series = _data[gender]["playerdf"]["tsPct"].fillna(0)
-
     eff_raw = float(player.get("tsPct", 0))
 
     # percentile-based efficiency (0 to 1)
@@ -325,6 +325,7 @@ def get_team_fit(team_id):
 
     team = team.iloc[0]
     precomputed_gap = compute_team_gap_profile(team, playerdf_all)
+    ts_series = d["ts_series"]
 
     # Read filters from POST body OR query params
     nil_min = body.get("nil_min") or (request.args.get("nil_min") and int(request.args.get("nil_min")))
@@ -350,7 +351,7 @@ def get_team_fit(team_id):
 
     results = []
     for _, player in pool.iterrows():
-        score = compute_match_score(player, team, ts_lo, ts_hi, precomputed_gap=precomputed_gap)
+        score = compute_match_score(player, team, ts_lo, ts_hi, ts_series,precomputed_gap=precomputed_gap)
         results.append({
             "Player": player["fullName"],
             "PlayerId": player["playerId"],
@@ -384,6 +385,8 @@ def get_player_fit(player_id):
     teamdf, playerdf, playerdf_all = d["teamdf"], d["playerdf"], d["playerdf_all"]
     teamstatsdf = d["teamstatsdf"]
     ts_lo, ts_hi = d["ts_lo"], d["ts_hi"]
+    ts_series = d["ts_series"]
+
 
     player_row = playerdf[playerdf["fullName"] == player_id]
     if player_row.empty:
@@ -403,7 +406,7 @@ def get_player_fit(player_id):
 
     results = []
     for _, team in pool.iterrows():
-        score = compute_match_score(player, team, ts_lo, ts_hi, playerdf_all=playerdf_all)
+        score = compute_match_score(player, team, ts_lo, ts_hi, ts_series,playerdf_all=playerdf_all)
 
         tid = team["teamId"]
         team_stats = {}
