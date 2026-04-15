@@ -486,13 +486,13 @@ def get_player_overview(player_name):
     prompt = f"""You are an expert college basketball analyst. Write a 3-4 sentence scouting report for this transfer portal player. Be specific, analytical, and direct. No fluff.
 
 Player: {p['fullName']}
-Position: {p.get('position','N/A')} | Year: {p.get('classYr','N/A')} | Previous team: {p.get('teamFullName','N/A')}
+Position: {p.get('position','N/A')} | Height (inches): {p.get('height','N/A')} | Year: {p.get('classYr','N/A')} | Previous team: {p.get('teamFullName','N/A')}
 
 Per-game stats: {fmt(p.get('ptsScoredPg'))} pts, {fmt(p.get('rebPg'))} reb, {fmt(p.get('astPg'))} ast, {fmt(p.get('stlPg'))} stl, {fmt(p.get('blkPg'))} blk, {fmt(p.get('tovPg'))} tov
 Shooting: FG {fmt(p.get('fgPct'), pct=True)}, 2P {fmt(p.get('fg2Pct'), pct=True)}, 3P {fmt(p.get('fg3Pct'), pct=True)}, FT {fmt(p.get('ftPct'), pct=True)}
 Shot profile (% of FGA): {shot_profile}
 
-Do not add a title just give the scouting report.
+Do not add a title just give the scouting report. DO NOT MAKE UP ANY INFORMATION. ONLY USE INFORMATION YOU ARE GIVEN TO CREATE THE REPORT.
 Write the scouting report now:"""
 
     try:
@@ -540,7 +540,7 @@ Defense: {fmt(t.get('drtg'))} DRtg | {fmt(t.get('efgPctAgst'), pct=True)} opp eF
 Rebounding: {fmt(t.get('orbPct'), pct=True)} ORB% | {fmt(t.get('drbPct'), pct=True)} DRB%
 Adjusted: {fmt(t.get('ortgAdj'))} adj ORtg | {fmt(t.get('drtgAdj'))} adj DRtg | {fmt(t.get('netRtgAdj'))} adj net
 
-Do not add a title just give the overview.
+Do not add a title just give the overview. DO NOT MAKE UP ANY INFORMATION. ONLY USE INFORMATION YOU ARE GIVEN TO CREATE THE OVERVIEW.
 Write the program overview now:"""
 
     try:
@@ -553,6 +553,119 @@ Write the program overview now:"""
         return jsonify({"overview": overview})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+# -----------------------------
+# MATCH SCORE (player × team)
+# -----------------------------
+@app.route("/get_match_score/<player_name>/<team_name>")
+def get_match_score(player_name, team_name):
+    gender = request.args.get("gender", "MALE").upper()
+    d = _get_data(gender)
+    teamdf, playerdf, playerdf_all = d["teamdf"], d["playerdf"], d["playerdf_all"]
+    teamstatsdf = d["teamstatsdf"]
+    ts_lo, ts_hi = d["ts_lo"], d["ts_hi"]
+    ts_series = d["ts_series"]
+
+    player_row = playerdf[playerdf["fullName"] == player_name]
+    if player_row.empty:
+        return jsonify({"error": "Player not found"}), 404
+
+    team_row = teamdf[teamdf["fullName"] == team_name]
+    if team_row.empty:
+        return jsonify({"error": "Team not found"}), 404
+
+    player = player_row.iloc[0]
+    team   = team_row.iloc[0]
+
+    score = compute_match_score(player, team, ts_lo, ts_hi, ts_series, playerdf_all=playerdf_all)
+
+    # Pull team stats for the prompt
+    ts_index = teamstatsdf.set_index("teamId")
+    tid = team["teamId"]
+    t = ts_index.loc[tid] if tid in ts_index.index else None
+
+    def fmt(val, pct=False):
+        if val is None or (isinstance(val, float) and np.isnan(val)):
+            return "N/A"
+        return f"{val*100:.1f}%" if pct else f"{val:.1f}"
+
+    shot_profile = ", ".join(
+        f"{f.replace('_freq','').replace('_',' ')}: {player[f]*100:.0f}%"
+        for f in FINAL_FEATURES if f in player
+    )
+
+    team_offense = ""
+    if t is not None:
+        team_offense = (
+            f"ORtg {fmt(t.get('ortg'))}, {fmt(t.get('ptsScoredPg'))} pts/g, "
+            f"eFG% {fmt(t.get('efgPct'), pct=True)}, 3pt rate {fmt(t.get('fga3Rate'), pct=True)}, "
+            f"pace {fmt(t.get('pace'))}"
+        )
+
+    gap = compute_team_gap_profile(team, playerdf_all)
+    if np.sum(gap) > 0:
+        top_gap_idx = int(np.argmax(gap))
+        top_gap = FINAL_FEATURES[top_gap_idx].replace("_freq","").replace("_"," ")
+    else:
+        top_gap = "none identified"
+
+    record = ""
+    if t is not None:
+        wins   = t.get("overallWins")
+        losses = t.get("overallLosses")
+        net    = t.get("netRanking")
+        if wins is not None and losses is not None:
+            record = f"{int(wins)}-{int(losses)}"
+            if net is not None:
+                record += f", NET #{int(net)}"
+
+    prompt = f"""You are an expert college basketball analyst. Analyze this player-team transfer fit in 3-4 sentences. Be specific and analytical — reference the actual numbers. No fluff.   
+
+Player: {player['fullName']} | {player.get('position','N/A')} | {player.get('classYr','N/A')} | From: {player.get('teamFullName','N/A')}
+Stats: {fmt(player.get('ptsScoredPg'))} pts, {fmt(player.get('rebPg'))} reb, {fmt(player.get('astPg'))} ast | FG {fmt(player.get('fgPct'), pct=True)}, 3P {fmt(player.get('fg3Pct'), pct=True)}, TS% {fmt(player.get('tsPct'), pct=True)}
+Shot profile: {shot_profile}
+
+Team: {team['fullName']} | {record}
+Offensive profile: {team_offense}
+Biggest roster gap: {top_gap}
+
+Match scores: Overall {score['FinalScore']*100:.1f}/100 | Shot Fit {score['ShotFit']*100:.1f}/100 | Gap Fill {score['GapFit']*100:.1f}/100 | Efficiency {score['Efficiency']*100:.1f}/100
+
+Explain specifically why this player does or doesn't fit this team — connect the shot profile to the team's style, the gap fill score to the roster need, and the efficiency score to how the player would contribute.
+DO NOT MAKE UP ANY INFORMATION. ONLY USE INFORMATION AND STATS YOU ARE PROVIDED TO CREATE THE REPORT.
+Write the analysis now:"""
+
+    try:
+        response = mistral.chat.complete(
+            model=MISTRAL_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        justification = response.choices[0].message.content.strip()
+    except Exception:
+        justification = None
+
+    def _to_py(v):
+        if isinstance(v, (np.integer,)): return int(v)
+        if isinstance(v, (np.floating,)): return None if np.isnan(v) else float(v)
+        return v
+
+    result = {
+        "Player":       player["fullName"],
+        "PlayerId":     _to_py(player.get("playerId")),
+        "PrevTeamId":   _to_py(player.get("teamId")),
+        "Position":     player.get("position"),
+        "Year":         player.get("classYr"),
+        "PrevTeam":     player.get("teamFullName"),
+        "NilValue":     int(player["nilValue"]) if pd.notna(player.get("nilValue")) else None,
+        "NilTier":      player.get("nilTier"),
+        "Team":         team["fullName"],
+        "TeamId":       _to_py(tid),
+        "Conference":   team.get("conferenceLongName") or team.get("conferenceId"),
+        **{c: round(float(player[c]), 3) if pd.notna(player.get(c)) else None for c in STAT_COLS},
+        **{k: _to_py(v) for k, v in score.items()},
+        "Justification": justification,
+    }
+    return jsonify(result)
 
 # -----------------------------
 # LISTS (for search dropdowns)

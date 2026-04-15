@@ -429,6 +429,99 @@ function TeamCard({ team, rank, selected, onClick }) {
   )
 }
 
+function MatchPanel({ data, loading, error }) {
+  const radarData = Object.entries(SCORE_LABELS).map(([key, label]) => ({
+    subject: label,
+    value: Math.round((data?.[key] || 0) * 100),
+  }))
+
+  if (loading) return (
+    <div className="match-panel">
+      <div className="status-row"><div className="spinner" /><span>Analyzing match...</span></div>
+    </div>
+  )
+
+  if (error) return (
+    <div className="match-panel">
+      <div className="status-row status-row--error">{error}</div>
+    </div>
+  )
+
+  if (!data) return null
+
+  return (
+    <div className="match-panel">
+      <div className="match-panel-heroes">
+        <div className="match-entity">
+          <PlayerAvatar teamId={data.PrevTeamId} playerId={data.PlayerId} name={data.Player} size="lg" />
+          <div className="match-entity-info">
+            <div className="match-entity-name">{data.Player}</div>
+            <div className="match-entity-sub">{[data.Position, data.Year, data.PrevTeam].filter(Boolean).join(' · ')}</div>
+          </div>
+        </div>
+
+        <div className="match-vs">
+          <div className="match-score-hero" style={{ color: scoreColor(data.FinalScore) }}>
+            {(data.FinalScore * 100).toFixed(1)}
+            <span className="detail-score-denom"> / 100</span>
+          </div>
+          <div className="match-vs-label">match score</div>
+        </div>
+
+        <div className="match-entity match-entity--right">
+          <TeamLogo teamId={data.TeamId} name={data.Team} size="lg" />
+          <div className="match-entity-info">
+            <div className="match-entity-name">{data.Team}</div>
+            <div className="match-entity-sub">{data.Conference}</div>
+          </div>
+        </div>
+      </div>
+
+      <div className="match-body">
+        <div className="match-left">
+          <div className="radar-wrap">
+            <ResponsiveContainer width="100%" height={200}>
+              <RadarChart data={radarData} margin={{ top: 10, right: 20, bottom: 10, left: 20 }}>
+                <PolarGrid stroke="#1e1e38" />
+                <PolarAngleAxis dataKey="subject" tick={{ fill: '#6666a0', fontSize: 10, fontFamily: 'inherit' }} />
+                <Tooltip contentStyle={{ background: '#12121e', border: '1px solid #1e1e38', borderRadius: 8, fontSize: 12, color: '#f0f0f8' }} />
+                <Radar dataKey="value" stroke="#e8334a" fill="#e8334a" fillOpacity={0.18} strokeWidth={2} />
+              </RadarChart>
+            </ResponsiveContainer>
+          </div>
+          <div className="score-bars">
+            {Object.entries(SCORE_LABELS).map(([key, label]) => (
+              <ScoreBar key={key} label={label} value={data[key] || 0} />
+            ))}
+          </div>
+          <div className="detail-stats" style={{ marginTop: 14 }}>
+            <StatPill label="PTS" value={data.ptsScoredPg} />
+            <StatPill label="REB" value={data.rebPg} />
+            <StatPill label="AST" value={data.astPg} />
+            <StatPill label="STL" value={data.stlPg} />
+            <StatPill label="BLK" value={data.blkPg} />
+            <StatPill label="FG%"  value={data.fgPct}  isPercent />
+            <StatPill label="3P%"  value={data.fg3Pct}  isPercent />
+            {data.NilValue != null && <StatPill label="NIL" value={data.NilValue / 1000} />}
+          </div>
+        </div>
+
+        <div className="match-right">
+          {data.Justification
+            ? <p className="match-justification">{data.Justification}</p>
+            : <p className="match-justification match-justification--dim">No analysis available.</p>
+          }
+          {data.Explanation?.length > 0 && (
+            <div className="detail-tags" style={{ marginTop: 12 }}>
+              {data.Explanation.map((e, i) => <span key={i} className="tag">{e}</span>)}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function Combobox({ options, value, onChange, onSelect, placeholder }) {
   const [open, setOpen] = useState(false)
   const ref = useRef(null)
@@ -496,6 +589,13 @@ export default function App() {
   const [activeQuery, setActiveQuery] = useState(null)
   const [allOptions, setAllOptions] = useState({ years: [], positions: [], conferences: [], maxNil: 0, total: 0 })
   const filterRefetchTimer = useRef(null)
+
+  // Match mode state
+  const [matchPlayer, setMatchPlayer] = useState('')
+  const [matchTeam, setMatchTeam] = useState('')
+  const [matchData, setMatchData] = useState(null)
+  const [matchLoading, setMatchLoading] = useState(false)
+  const [matchError, setMatchError] = useState(null)
 
   // Filters are applied server-side — results is just weights applied to whatever the backend returned
   const results = rawResults.length > 0 ? applyWeights(rawResults, weights) : []
@@ -570,6 +670,27 @@ export default function App() {
     setActiveQuery(null)
     setAllOptions({ years: [], positions: [], conferences: [], maxNil: 0, total: 0 })
     clearFilters()
+    setMatchPlayer('')
+    setMatchTeam('')
+    setMatchData(null)
+    setMatchError(null)
+  }
+
+  async function fetchMatchScore(player, team) {
+    if (!player || !team) return
+    setMatchData(null)
+    setMatchError(null)
+    setMatchLoading(true)
+    try {
+      const url = `${API}/get_match_score/${encodeURIComponent(player)}/${encodeURIComponent(team)}?gender=${gender}`
+      const data = await fetch(url).then(r => r.json())
+      if (data.error) setMatchError(data.error)
+      else setMatchData(data)
+    } catch {
+      setMatchError('Could not reach the server.')
+    } finally {
+      setMatchLoading(false)
+    }
   }
 
   function switchGender(g) {
@@ -644,45 +765,82 @@ export default function App() {
             >
               Find Teams
             </button>
+            <button
+              className={`mode-btn ${mode === 'match' ? 'mode-btn--on' : ''}`}
+              onClick={() => switchMode('match')}
+            >
+              Match Score
+            </button>
           </div>
         </div>
       </header>
 
       <main className="main">
-        <div className={`search-section ${hasResults ? 'search-section--compact' : ''}`}>
-          {!hasResults && (
-            <div className="hero">
-              <h1 className="hero-title">
-                {mode === 'team'
-                  ? <>Find your next<br /><span className="hero-accent">transfer target</span></>
-                  : <>Find the right<br /><span className="hero-accent">program fit</span></>
-                }
-              </h1>
-              <p className="hero-sub">
-                {mode === 'team'
-                  ? "Match portal players to your system using shot profile & gap analysis"
-                  : "See which programs align with a player's game and style"
-                }
-              </p>
+        {mode === 'match' ? (
+          <>
+            <div className="match-search-section">
+              {!matchData && !matchLoading && !matchError && (
+                <div className="hero" style={{ marginBottom: 32 }}>
+                  <h1 className="hero-title">Analyze a<br /><span className="hero-accent">specific match</span></h1>
+                  <p className="hero-sub">Pick any portal player and any team to get their match score and an AI breakdown</p>
+                </div>
+              )}
+              <div className="match-search-row">
+                <Combobox
+                  options={players}
+                  value={matchPlayer}
+                  onChange={setMatchPlayer}
+                  onSelect={p => { setMatchPlayer(p); fetchMatchScore(p, matchTeam) }}
+                  placeholder="Search a player..."
+                />
+                <span className="match-vs-divider">vs</span>
+                <Combobox
+                  options={teams}
+                  value={matchTeam}
+                  onChange={setMatchTeam}
+                  onSelect={t => { setMatchTeam(t); fetchMatchScore(matchPlayer, t) }}
+                  placeholder="Search a team..."
+                />
+              </div>
             </div>
-          )}
-          <Combobox
-            options={mode === 'team' ? teams : players}
-            value={query}
-            onChange={setQuery}
-            onSelect={handleSelect}
-            placeholder={mode === 'team' ? 'Search a team...' : 'Search a player...'}
-          />
-        </div>
+            <MatchPanel data={matchData} loading={matchLoading} error={matchError} />
+          </>
+        ) : (
+          <>
+            <div className={`search-section ${hasResults ? 'search-section--compact' : ''}`}>
+              {!hasResults && (
+                <div className="hero">
+                  <h1 className="hero-title">
+                    {mode === 'team'
+                      ? <>Find your next<br /><span className="hero-accent">transfer target</span></>
+                      : <>Find the right<br /><span className="hero-accent">program fit</span></>
+                    }
+                  </h1>
+                  <p className="hero-sub">
+                    {mode === 'team'
+                      ? "Match portal players to your system using shot profile & gap analysis"
+                      : "See which programs align with a player's game and style"
+                    }
+                  </p>
+                </div>
+              )}
+              <Combobox
+                options={mode === 'team' ? teams : players}
+                value={query}
+                onChange={setQuery}
+                onSelect={handleSelect}
+                placeholder={mode === 'team' ? 'Search a team...' : 'Search a player...'}
+              />
+            </div>
 
-        {loading && (
-          <div className="status-row">
-            <div className="spinner" />
-            <span>Analyzing fit...</span>
-          </div>
-        )}
+            {loading && (
+              <div className="status-row">
+                <div className="spinner" />
+                <span>Analyzing fit...</span>
+              </div>
+            )}
 
-        {error && <div className="status-row status-row--error">{error}</div>}
+            {error && <div className="status-row status-row--error">{error}</div>}
 
         {hasResults && (
           <div className={`results-layout ${selected ? 'results-layout--split' : ''}`}>
@@ -764,6 +922,8 @@ export default function App() {
               </div>
             )}
           </div>
+        )}
+          </>
         )}
       </main>
       <ChatPopup gender={gender} />
