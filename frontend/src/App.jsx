@@ -597,6 +597,13 @@ export default function App() {
   const [matchLoading, setMatchLoading] = useState(false)
   const [matchError, setMatchError] = useState(null)
 
+  // Smart search state
+  const [smartQuery, setSmartQuery] = useState('')
+  const [smartTarget, setSmartTarget] = useState('players')
+  const [smartResults, setSmartResults] = useState(null)   // {description, results, target}
+  const [smartLoading, setSmartLoading] = useState(false)
+  const [smartError, setSmartError] = useState(null)
+
   // Filters are applied server-side — results is just weights applied to whatever the backend returned
   const results = rawResults.length > 0 ? applyWeights(rawResults, weights) : []
 
@@ -674,6 +681,26 @@ export default function App() {
     setMatchTeam('')
     setMatchData(null)
     setMatchError(null)
+  }
+
+  async function runSmartSearch(q, target) {
+    if (!q.trim()) return
+    setSmartResults(null)
+    setSmartError(null)
+    setSmartLoading(true)
+    try {
+      const data = await fetch(`${API}/natural_search`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: q, gender, target }),
+      }).then(r => r.json())
+      if (data.error) setSmartError(data.error)
+      else setSmartResults(data)
+    } catch {
+      setSmartError('Could not reach the server.')
+    } finally {
+      setSmartLoading(false)
+    }
   }
 
   async function fetchMatchScore(player, team) {
@@ -771,12 +798,83 @@ export default function App() {
             >
               Match Score
             </button>
+            <button
+              className={`mode-btn ${mode === 'smart' ? 'mode-btn--on' : ''}`}
+              onClick={() => switchMode('smart')}
+            >
+              Smart Search
+            </button>
           </div>
         </div>
       </header>
 
       <main className="main">
-        {mode === 'match' ? (
+        {mode === 'smart' ? (
+          <div className="smart-section">
+            {!smartResults && !smartLoading && !smartError && (
+              <div className="hero" style={{ marginBottom: 32 }}>
+                <h1 className="hero-title">Search in<br /><span className="hero-accent">plain English</span></h1>
+                <p className="hero-sub">Describe what you're looking for and we'll find the best matches</p>
+              </div>
+            )}
+            <div className="smart-input-wrap">
+              <div className="smart-target-toggle">
+                <button
+                  className={`smart-target-btn ${smartTarget === 'players' ? 'smart-target-btn--on' : ''}`}
+                  onClick={() => setSmartTarget('players')}
+                >Players</button>
+                <button
+                  className={`smart-target-btn ${smartTarget === 'teams' ? 'smart-target-btn--on' : ''}`}
+                  onClick={() => setSmartTarget('teams')}
+                >Teams</button>
+              </div>
+              <div className="smart-input-row">
+                <textarea
+                  className="smart-textarea"
+                  placeholder={smartTarget === 'players'
+                    ? 'e.g. "tall guards who shoot efficiently from three and played in the SEC"'
+                    : 'e.g. "teams in the Big 12 who attack the rim and play at a fast pace"'}
+                  value={smartQuery}
+                  onChange={e => setSmartQuery(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); runSmartSearch(smartQuery, smartTarget) } }}
+                  rows={2}
+                />
+                <button
+                  className="smart-submit"
+                  onClick={() => runSmartSearch(smartQuery, smartTarget)}
+                  disabled={smartLoading || !smartQuery.trim()}
+                >
+                  {smartLoading ? <div className="spinner spinner--sm" /> : '→'}
+                </button>
+              </div>
+            </div>
+
+            {smartLoading && (
+              <div className="status-row"><div className="spinner" /><span>Analyzing your query...</span></div>
+            )}
+            {smartError && <div className="status-row status-row--error">{smartError}</div>}
+
+            {smartResults && (
+              <>
+                <div className="smart-description">
+                  <span className="smart-description-label">Interpreted as: </span>
+                  {smartResults.description}
+                  <span className="smart-description-count"> — {smartResults.results.length} result{smartResults.results.length !== 1 ? 's' : ''}</span>
+                </div>
+                <div className="results-list">
+                  {smartResults.target === 'players'
+                    ? smartResults.results.map((item, i) => (
+                        <PlayerCard key={item.PlayerId ?? i} player={item} rank={i + 1} selected={false} onClick={() => {}} />
+                      ))
+                    : smartResults.results.map((item, i) => (
+                        <TeamCard key={item.TeamId ?? i} team={item} rank={i + 1} selected={false} onClick={() => {}} />
+                      ))
+                  }
+                </div>
+              </>
+            )}
+          </div>
+        ) : mode === 'match' ? (
           <>
             <div className="match-search-section">
               {!matchData && !matchLoading && !matchError && (
@@ -926,6 +1024,7 @@ export default function App() {
           </>
         )}
       </main>
+
       <ChatPopup gender={gender} />
     </div>
   )

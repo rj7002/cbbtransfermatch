@@ -668,6 +668,300 @@ Write the analysis now:"""
     return jsonify(result)
 
 # -----------------------------
+# NATURAL LANGUAGE SEARCH
+# -----------------------------
+PLAYER_STAT_FIELDS = {
+    "ptsScoredPg": "points per game",
+    "astPg": "assists per game",
+    "rebPg": "rebounds per game",
+    "blkPg": "blocks per game",
+    "stlPg": "steals per game",
+    "tovPg": "turnovers per game",
+    "fgPct": "field goal percentage (0-1)",
+    "fg2Pct": "two-point percentage (0-1)",
+    "fg3Pct": "three-point percentage (0-1)",
+    "ftPct": "free throw percentage (0-1)",
+    "tsPct": "true shooting percentage (0-1)",
+    "mpg": "minutes per game",
+    "rim_freq": "frequency of shots at the rim (0-1)",
+    "paint_freq": "frequency of paint/close shots (0-1)",
+    "midrange_freq": "frequency of mid-range shots (0-1)",
+    "corner3_freq": "frequency of corner three shots (0-1)",
+    "atb3_freq": "frequency of above-the-break three shots (0-1)",
+    "deep3_freq": "frequency of deep three shots (0-1)",
+}
+
+TEAM_STAT_FIELDS = {
+    "ptsScoredPg": "points scored per game",
+    "fgPct": "field goal percentage (0-1)",
+    "fg3Pct": "three-point percentage (0-1)",
+    "efgPct": "effective FG percentage (0-1)",
+    "rebPg": "rebounds per game",
+    "astPg": "assists per game",
+    "tovPg": "turnovers per game",
+    "ortg": "offensive rating",
+    "drtg": "defensive rating",
+    "netRtg": "net rating",
+    "pace": "pace (possessions per 40 min)",
+    "rim_freq": "frequency of rim/at-basket shots (0-1)",
+    "paint_freq": "frequency of paint shots (0-1)",
+    "midrange_freq": "frequency of mid-range shots (0-1)",
+    "corner3_freq": "frequency of corner three shots (0-1)",
+    "atb3_freq": "frequency of above-the-break threes (0-1)",
+    "deep3_freq": "frequency of deep threes (0-1)",
+}
+
+CONFERENCE_ALIASES = {
+    "SEC": "Southeastern Conference",
+    "ACC": "Atlantic Coast Conference",
+    "Big Ten": "Big Ten Conference",
+    "Big 12": "Big 12 Conference",
+    "Pac-12": "Pac-12 Conference",
+    "American": "American Athletic Conference",
+    "Mountain West": "Mountain West Conference",
+    "MAC": "Mid-American Conference",
+    "Sun Belt": "Sun Belt Conference",
+    "CUSA": "Conference USA",
+    "WCC": "West Coast Conference",
+    "A-10": "Atlantic 10 Conference",
+    "MVC": "Missouri Valley Conference",
+    "Big East": "Big East Conference",
+    "WAC": "Western Athletic Conference",
+    "Big West": "Big West Conference",
+    "CAA": "Coastal Athletic Association",
+    "OVC": "Ohio Valley Conference",
+    "SoCon": "Southern Conference",
+    "SWAC": "Southwestern Athletic Conference",
+    "MEAC": "Mid-Eastern Athletic Conference",
+    "MAAC": "Metro Atlantic Athletic Conference",
+    "Ivy": "Ivy League",
+    "Patriot": "Patriot League",
+    "NEC": "Northeast Conference",
+    "AEC": "America East Conference",
+    "Big South": "Big South Conference",
+    "Horizon": "Horizon League",
+    "Summit": "Summit League",
+    "ASUN": "ASUN Conference",
+}
+
+@app.route("/natural_search", methods=["POST"])
+def natural_search():
+    body = request.get_json(silent=True) or {}
+    query   = body.get("query", "").strip()
+    gender  = body.get("gender", "MALE").upper()
+    target  = body.get("target", "players")  # "players" or "teams"
+
+    if not query:
+        return jsonify({"error": "No query provided"}), 400
+
+    d = _get_data(gender)
+
+    if target == "players":
+        stat_schema = "\n".join(f"  - {k}: {v}" for k, v in PLAYER_STAT_FIELDS.items())
+        system_prompt = f"""You are a college basketball data analyst. Convert a natural language player search query into a JSON filter object.
+
+Available filter fields:
+  - conferences: list of full conference names (e.g. ["Southeastern Conference", "Big Ten Conference"])
+  - positions: list of position strings — use substrings like ["G"] for guards, ["F"] for forwards, ["C"] for centers. Can combine: ["G", "F"]
+  - height_min: minimum height in inches (e.g. 76 = 6'4")
+  - height_max: maximum height in inches
+  - class_years: list of class year strings, e.g. ["Junior", "Senior", "Graduate"]
+  - stat_filters: dict of field → {{"min": X, "max": Y}} using these fields:
+{stat_schema}
+  - sort_by: list of field names to sort descending (best matches first), max 2 fields
+  - description: one-sentence plain English summary of what you understood
+
+Conference aliases: {json.dumps(CONFERENCE_ALIASES)}
+
+Rules:
+- Only include fields that are clearly implied by the query. Omit everything else.
+- For percentage fields (fgPct, fg3Pct, tsPct etc.) use 0-1 scale, not 0-100.
+- For shot profile freqs (rim_freq, corner3_freq etc.) "a lot" ≈ min 0.15, "very often" ≈ min 0.20
+- For fg3Pct: "efficient from three" ≈ min 0.36, "very efficient" ≈ min 0.39
+- For tsPct: "efficient scorer" ≈ min 0.56, "very efficient" ≈ min 0.60
+- "tall guard" = position G, height_min ~75 (6'3")
+- Return ONLY valid JSON, no markdown, no explanation.
+
+Example output:
+{{"conferences": ["Southeastern Conference"], "positions": ["G"], "height_min": 75, "stat_filters": {{"fg3Pct": {{"min": 0.37}}, "corner3_freq": {{"min": 0.12}}}}, "sort_by": ["fg3Pct", "tsPct"], "description": "Tall guards from the SEC who shoot efficiently from three"}}"""
+
+    else:
+        stat_schema = "\n".join(f"  - {k}: {v}" for k, v in TEAM_STAT_FIELDS.items())
+        system_prompt = f"""You are a college basketball data analyst. Convert a natural language team search query into a JSON filter object.
+
+Available filter fields:
+  - conferences: list of full conference names (e.g. ["Southeastern Conference"])
+  - stat_filters: dict of field → {{"min": X, "max": Y}} using these fields:
+{stat_schema}
+  - sort_by: list of field names to sort descending (best matches first), max 2 fields
+  - description: one-sentence plain English summary of what you understood
+
+Conference aliases: {json.dumps(CONFERENCE_ALIASES)}
+
+Rules:
+- Only include fields that are clearly implied by the query.
+- For percentage fields use 0-1 scale.
+- For shot freqs: "a lot" ≈ min 0.15, "very often" ≈ min 0.20
+- "attack the rim" → rim_freq min ~0.20, "shoot corner threes" → corner3_freq min ~0.12
+- "fast pace" → pace min ~72, "slow" → pace max ~68
+- "elite offense" → ortg min ~115, "good defense" → drtg max ~105
+- Return ONLY valid JSON, no markdown, no explanation.
+
+Example output:
+{{"conferences": ["Southeastern Conference"], "stat_filters": {{"corner3_freq": {{"min": 0.12}}, "rim_freq": {{"min": 0.20}}}}, "sort_by": ["corner3_freq", "rim_freq"], "description": "SEC teams that attack the rim and shoot corner threes"}}"""
+
+    try:
+        response = mistral.chat.complete(
+            model=MISTRAL_MODEL,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": query},
+            ],
+        )
+        raw = response.choices[0].message.content.strip()
+        # Strip markdown code fences if present
+        if raw.startswith("```"):
+            raw = "\n".join(raw.split("\n")[1:])
+        if raw.endswith("```"):
+            raw = raw.rsplit("```", 1)[0]
+        criteria = json.loads(raw)
+    except Exception as e:
+        return jsonify({"error": f"Could not parse query: {e}"}), 500
+
+    description = criteria.get("description", query)
+
+    if target == "players":
+        pool = d["playerdf"].copy()
+
+        # playerdf only has conferenceId — build name mapping from teamdf
+        conf_map = d["teamdf"].drop_duplicates("conferenceId").set_index("conferenceId")["conferenceLongName"].to_dict()
+        pool["conferenceLongName"] = pool["conferenceId"].map(conf_map)
+
+        conferences = criteria.get("conferences", [])
+        if conferences:
+            pool = pool[pool["conferenceLongName"].isin(conferences)]
+
+        positions = criteria.get("positions", [])
+        if positions:
+            mask = pool["position"].astype(str).str.contains("|".join(positions), case=False, na=False)
+            pool = pool[mask]
+
+        h_min = criteria.get("height_min")
+        h_max = criteria.get("height_max")
+        if h_min is not None and "height" in pool.columns:
+            pool = pool[pd.to_numeric(pool["height"], errors="coerce").fillna(0) >= h_min]
+        if h_max is not None and "height" in pool.columns:
+            pool = pool[pd.to_numeric(pool["height"], errors="coerce").fillna(0) <= h_max]
+
+        class_years = criteria.get("class_years", [])
+        if class_years:
+            mask = pool["classYr"].astype(str).str.lower().str.contains(
+                "|".join(y.lower() for y in class_years), na=False
+            )
+            pool = pool[mask]
+
+        for field, bounds in criteria.get("stat_filters", {}).items():
+            if field not in pool.columns:
+                continue
+            col = pd.to_numeric(pool[field], errors="coerce")
+            if "min" in bounds:
+                pool = pool[col >= bounds["min"]]
+            if "max" in bounds:
+                pool = pool[col <= bounds["max"]]
+
+        sort_fields = [f for f in criteria.get("sort_by", []) if f in pool.columns]
+        if sort_fields:
+            pool = pool.sort_values(sort_fields, ascending=False)
+
+        records = []
+        for _, p in pool.head(25).iterrows():
+            records.append({
+                "Player":     p["fullName"],
+                "PlayerId":   int(p["playerId"]) if pd.notna(p.get("playerId")) else None,
+                "PrevTeamId": int(p["teamId"])   if pd.notna(p.get("teamId"))   else None,
+                "Position":   p.get("position"),
+                "Year":       p.get("classYr"),
+                "PrevTeam":   p.get("teamFullName"),
+                "Conference": p.get("conferenceLongName"),
+                "NilTier":    p.get("nilTier"),
+                "NilValue":   int(p["nilValue"]) if pd.notna(p.get("nilValue")) else None,
+                **{c: round(float(p[c]), 3) if pd.notna(p.get(c)) else None for c in STAT_COLS},
+                "FinalScore": 0,
+            })
+
+        return jsonify({"description": description, "results": records, "target": "players"})
+
+    else:
+        # Teams
+        teamdf   = d["teamdf"].copy()
+        teamstatsdf = d["teamstatsdf"].copy()
+        ts_index = teamstatsdf.set_index("teamId")
+
+        pool = teamdf.copy()
+
+        conferences = criteria.get("conferences", [])
+        if conferences:
+            pool = pool[pool["conferenceLongName"].isin(conferences)]
+
+        # Merge shot profile into pool for shot freq filters
+        for field, bounds in criteria.get("stat_filters", {}).items():
+            if field in pool.columns:
+                col = pd.to_numeric(pool[field], errors="coerce")
+                if "min" in bounds:
+                    pool = pool[col >= bounds["min"]]
+                if "max" in bounds:
+                    pool = pool[col <= bounds["max"]]
+            elif field in TEAM_STAT_COLS:
+                # Filter on teamstatsdf then restrict pool
+                valid_tids = set()
+                for tid, row in ts_index.iterrows():
+                    val = row.get(field)
+                    if val is None or (isinstance(val, float) and np.isnan(val)):
+                        continue
+                    ok = True
+                    if "min" in bounds and float(val) < bounds["min"]:
+                        ok = False
+                    if "max" in bounds and float(val) > bounds["max"]:
+                        ok = False
+                    if ok:
+                        valid_tids.add(tid)
+                pool = pool[pool["teamId"].isin(valid_tids)]
+
+        sort_fields = [f for f in criteria.get("sort_by", []) if f in pool.columns]
+        if sort_fields:
+            pool = pool.sort_values(sort_fields, ascending=False)
+        elif not sort_fields:
+            # sort by first stat-filter field in teamstatsdf if available
+            sort_candidates = [f for f in criteria.get("sort_by", []) if f in ts_index.columns]
+            if sort_candidates:
+                pool = pool.copy()
+                pool["_sort"] = pool["teamId"].map(
+                    lambda tid: float(ts_index.loc[tid, sort_candidates[0]])
+                    if tid in ts_index.index and pd.notna(ts_index.loc[tid, sort_candidates[0]])
+                    else 0
+                )
+                pool = pool.sort_values("_sort", ascending=False)
+
+        records = []
+        for _, team in pool.head(25).iterrows():
+            tid = team["teamId"]
+            team_stats = {}
+            if tid in ts_index.index:
+                ts = ts_index.loc[tid]
+                for col in TEAM_STAT_COLS:
+                    val = ts.get(col) if hasattr(ts, "get") else (ts[col] if col in ts.index else None)
+                    team_stats[col] = round(float(val), 3) if val is not None and pd.notna(val) else None
+            records.append({
+                "Team":       team["fullName"],
+                "TeamId":     int(tid) if pd.notna(tid) else None,
+                "Conference": team.get("conferenceLongName") or team.get("conferenceId"),
+                **team_stats,
+                "FinalScore": 0,
+            })
+
+        return jsonify({"description": description, "results": records, "target": "teams"})
+
+# -----------------------------
 # LISTS (for search dropdowns)
 # -----------------------------
 @app.route("/get_teams")

@@ -1040,6 +1040,106 @@ body {
   font-style: italic;
 }
 
+/* ── SMART SEARCH ────────────────────────────────────── */
+.smart-section {
+  max-width: 720px;
+  margin: 0 auto;
+}
+.smart-input-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 28px;
+}
+.smart-target-toggle {
+  display: flex;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 3px;
+  gap: 3px;
+  align-self: flex-start;
+}
+.smart-target-btn {
+  padding: 5px 16px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 13px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.smart-target-btn--on {
+  background: var(--accent);
+  color: #fff;
+}
+.smart-input-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+.smart-textarea {
+  flex: 1;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px 16px;
+  color: var(--text);
+  font-size: 15px;
+  font-family: inherit;
+  resize: none;
+  line-height: 1.5;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.smart-textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+.smart-textarea::placeholder { color: var(--text-dim); }
+.smart-submit {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  border: none;
+  background: var(--accent);
+  color: #fff;
+  font-size: 20px;
+  cursor: pointer;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: opacity 0.15s;
+}
+.smart-submit:disabled { opacity: 0.4; cursor: default; }
+.smart-submit:not(:disabled):hover { opacity: 0.85; }
+.smart-description {
+  font-size: 13px;
+  color: var(--text-dim);
+  margin-bottom: 18px;
+  padding: 10px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.smart-description-label {
+  font-weight: 600;
+  color: var(--text-mid);
+}
+.smart-description-count {
+  color: var(--accent);
+  font-weight: 600;
+}
+.spinner--sm {
+  width: 14px;
+  height: 14px;
+  border-width: 2px;
+}
+
 /* ── RESPONSIVE ──────────────────────────────────────── */
 @media (max-width: 900px) {
   .hero-title { font-size: 34px; }
