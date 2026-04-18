@@ -722,7 +722,7 @@ def get_match_score(player_name, team_name):
 
     prompt = f"""You are an expert college basketball analyst. Analyze this player-team transfer fit in 3-4 sentences. Be specific and analytical — reference the actual numbers. No fluff.   
 
-Player: {player['fullName']} | {player.get('position','N/A')} | {player.get('classYr','N/A')} | From: {player.get('teamFullName','N/A')}
+Player: {player['fullName']} | {gender}| {player.get('position','N/A')} | {player.get('classYr','N/A')} | From: {player.get('teamFullName','N/A')}
 Stats: {fmt(player.get('ptsScoredPg'))} pts, {fmt(player.get('rebPg'))} reb, {fmt(player.get('astPg'))} ast | FG {fmt(player.get('fgPct'), pct=True)}, 3P {fmt(player.get('fg3Pct'), pct=True)}, TS% {fmt(player.get('tsPct'), pct=True)}
 Shot profile: {shot_profile}
 
