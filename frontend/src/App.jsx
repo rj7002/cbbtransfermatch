@@ -8,17 +8,36 @@ import './App.css'
 const API = import.meta.env.VITE_API_URL || 'http://localhost:5002'
 
 const SCORE_LABELS = {
-  ShotFit: 'Shot Fit',
-  // OpportunityFit: 'Opportunity',
-  GapFit: 'Gap Fill',
-  Efficiency: 'Efficiency',
+  ShotFit:    'Shot Fit',
+  GapFit:     'Gap Fill',
+  ContextEff: 'Context Fit',
+}
+
+const SCORE_DESCRIPTIONS = {
+  ShotFit: {
+    title: 'Shot Fit',
+    what: 'How closely the player\'s shot zone distribution matches the team\'s offensive system.',
+    how: 'Cosine similarity between 23 shot zone frequencies (rim, paint, mid-range, corner 3, above-the-break 3, deep 3, etc.) for the player and team.',
+    interp: 'High → player shoots from zones the team already attacks. Low → player\'s shot profile clashes with the system.',
+  },
+  GapFit: {
+    title: 'Gap Fill',
+    what: 'How well the player fills the shot profile gaps left by departing players (portal exits + seniors).',
+    how: 'The team\'s roster gap is computed as the weighted average shot profile of lost players minus the team\'s existing profile. Gap Fill is the cosine similarity between the player\'s profile and that gap vector.',
+    interp: 'High → player directly addresses what the team is losing. Low → player redundant with returning players or unrelated to the need.',
+  },
+  ContextEff: {
+    title: 'Context Fit',
+    what: 'How efficient the player is relative to the team\'s offensive environment.',
+    how: 'Player efficiency index = percentile rank of (TS% × Usage%) among all portal players. Team environment index = percentile rank of (ORtg × eFG%) among all D1 teams. Context Fit = sigmoid of the difference — no hard clipping.',
+    interp: 'High → player is more efficient than what the team\'s environment demands. Low → player may struggle to match the team\'s efficiency bar.',
+  },
 }
 
 const DEFAULT_WEIGHTS = {
-  ShotFit: 45,
-  // OpportunityFit: 25,
-  GapFit: 25,
-  Efficiency: 30,
+  ShotFit:    45,
+  GapFit:     25,
+  ContextEff: 30,
 }
 
 function applyWeights(items, weights) {
@@ -145,7 +164,7 @@ function WeightsPanel({ weights, onChange }) {
       </div>
       {Object.entries(SCORE_LABELS).map(([key, label]) => (
         <div key={key} className="weight-row">
-          <span className="weight-label">{label}</span>
+          <span className="weight-label">{label}<InfoTooltip scoreKey={key} /></span>
           <input
             type="range"
             min={0}
@@ -162,6 +181,31 @@ function WeightsPanel({ weights, onChange }) {
   )
 }
 
+function InfoTooltip({ scoreKey }) {
+  const [visible, setVisible] = useState(false)
+  const d = SCORE_DESCRIPTIONS[scoreKey]
+  if (!d) return null
+  return (
+    <span className="info-tooltip-wrap">
+      <button
+        className="info-btn"
+        onMouseEnter={() => setVisible(true)}
+        onMouseLeave={() => setVisible(false)}
+        onClick={() => setVisible(v => !v)}
+        aria-label={`About ${d.title}`}
+      >ⓘ</button>
+      {visible && (
+        <div className="info-popover">
+          <div className="info-popover-title">{d.title}</div>
+          <div className="info-popover-section"><span className="info-label">What</span>{d.what}</div>
+          <div className="info-popover-section"><span className="info-label">How</span>{d.how}</div>
+          <div className="info-popover-section"><span className="info-label">Score</span>{d.interp}</div>
+        </div>
+      )}
+    </span>
+  )
+}
+
 function scoreColor(val) {
   const v = Math.max(0, Math.min(1, val))
   if (v < 0.5) {
@@ -172,10 +216,10 @@ function scoreColor(val) {
   return `rgb(${Math.round(220 - 140 * t)}, ${Math.round(160 + 40 * t)}, 60)`
 }
 
-function ScoreBar({ label, value }) {
+function ScoreBar({ label, value, scoreKey }) {
   return (
     <div className="score-bar">
-      <span className="score-bar-label">{label}</span>
+      <span className="score-bar-label">{label}{scoreKey && <InfoTooltip scoreKey={scoreKey} />}</span>
       <div className="bar-track">
         <div
           className="bar-fill"
@@ -259,6 +303,9 @@ function DetailPanel({ item, mode, gender, onClose }) {
           <StatPill label="REB"  value={item.rebPg} />
           <StatPill label="AST"  value={item.astPg} />
           <StatPill label="TOV"  value={item.tovPg} />
+          {item.PlayerEnv   != null && <StatPill label="P.Env" value={item.PlayerEnv}   isPercent />}
+          {item.TeamEnv     != null && <StatPill label="T.Env" value={item.TeamEnv}     isPercent />}
+          {item.RankingJump != null && <StatPill label="Rank↑" value={item.RankingJump} isPercent />}
         </div>
       )}
 
@@ -312,7 +359,7 @@ function DetailPanel({ item, mode, gender, onClose }) {
 
       <div className="score-bars">
         {Object.entries(SCORE_LABELS).map(([key, label]) => (
-          <ScoreBar key={key} label={label} value={item[key] || 0} />
+          <ScoreBar key={key} label={label} value={item[key] || 0} scoreKey={key} />
         ))}
       </div>
 
@@ -421,6 +468,11 @@ function TeamCard({ team, rank, selected, onClick }) {
           <StatPill label="eFG%" value={team.efgPct} isPercent />
           <StatPill label="3P%"  value={team.fg3Pct}  isPercent />
         </div>
+        {team.RankingJump != null && team.RankingJump > 0 && (
+          <div className="card-jump">
+            ↑ {Math.round(team.RankingJump * 100)}pt ranking jump
+          </div>
+        )}
       </div>
       <div className="card-score" style={{ color: scoreColor(team.FinalScore) }}>
         <span className="score-big">{Math.round(team.FinalScore * 100)}</span>
@@ -881,6 +933,7 @@ export default function App() {
                 <div className="hero" style={{ marginBottom: 32 }}>
                   <h1 className="hero-title">Analyze a<br /><span className="hero-accent">specific match</span></h1>
                   <p className="hero-sub">Pick any portal player and any team to get their match score and an AI breakdown</p>
+                  <p className="hero-sub2">Score generated using default weights (45% shot fit, 25% gap fill, 30% context fit)</p>
                 </div>
               )}
               <div className="match-search-row">
@@ -1024,7 +1077,6 @@ export default function App() {
           </>
         )}
       </main>
-
       <ChatPopup gender={gender} />
     </div>
   )

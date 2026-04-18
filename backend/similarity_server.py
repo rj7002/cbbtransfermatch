@@ -119,30 +119,45 @@ def load_gender_data(gender: str):
         lambda v: "High Value" if v >= nil["high"] else ("Mid Value" if v >= nil["low"] else "Low Value")
     )
 
+    # Player environment index: percentile rank of tsPct * usagePct (no constants)
+    player_eff_series = playerdf_all["tsPct"] * playerdf_all["usagePct"]
+    playerdf_all["player_env"] = player_eff_series.rank(pct=True)
+    playerdf["player_env"] = playerdf["playerId"].map(
+        playerdf_all.set_index("playerId")["player_env"]
+    )
+    eff_lo = player_eff_series.quantile(0.05)
+    eff_hi = player_eff_series.quantile(0.95)
+
     # Build shot features
     teamdf_f     = pd.concat([teamdf,      build_features(teamdf)],      axis=1)
     playerdf_f   = pd.concat([playerdf,    build_features(playerdf)],    axis=1)
     playerdf_all_f = pd.concat([playerdf_all, build_features(playerdf_all)], axis=1)
 
-    # ts_series = playerdf_f.apply(_player_efg, axis=1)
-    ts_series = pd.to_numeric(playerdf_f["tsPct"], errors="coerce").fillna(0)
-    ts_lo = float(ts_series.quantile(0.05))
-    ts_hi = float(ts_series.quantile(0.95))
+    teamstatsdf["fullName"] = teamstatsdf["teamMarket"] + " " + teamstatsdf["teamName"]
+    teamstatsdf_offense = teamstatsdf[teamstatsdf["isOffense"] == True].copy()
+
+    # Team environment index: percentile rank of ortg * efgPct (no constants)
+    team_eff_raw = teamstatsdf_offense["ortg"] * teamstatsdf_offense["efgPct"]
+    teamstatsdf_offense["team_env"] = team_eff_raw.rank(pct=True)
+
+    # Merge team_env onto teamdf_f so match score functions can access it
+    teamdf_f["team_env"] = teamdf_f["teamId"].map(
+        teamstatsdf_offense.set_index("teamId")["team_env"]
+    )
 
     print(f"[{gender}] competitionId={comp_id} | {len(playerdf_f)} portal players")
 
-    teamstatsdf["fullName"] = teamstatsdf["teamMarket"] + " " + teamstatsdf["teamName"]
-    teamstatsdf_offense = teamstatsdf[teamstatsdf["isOffense"] == True]
+
 
     return {
         "teamdf":        teamdf_f,
         "teamstatsdf":   teamstatsdf_offense,
         "playerdf":      playerdf_f,
         "playerdf_all":  playerdf_all_f,
-        "ts_lo":        ts_lo,
-        "ts_hi":        ts_hi,
+        "eff_lo":        eff_lo,
+        "eff_hi":          eff_hi,
         "comp_id":       comp_id,
-        "ts_series" : ts_series
+        "eff_series" : player_eff_series
     }
 
 def _get_data(gender: str) -> dict:
@@ -251,13 +266,54 @@ def generate_explanation(player, gap, a):
 # -----------------------------
 # MATCH SCORE
 # -----------------------------
-def compute_match_score(player, team, ts_lo, ts_hi, ts_series,precomputed_gap=None, playerdf_all=None):
+# def compute_match_score(player, team,precomputed_gap=None, playerdf_all=None):
+#     a = np.nan_to_num(np.array(player[FINAL_FEATURES], dtype=np.float64))
+#     b = np.nan_to_num(np.array(team[FINAL_FEATURES], dtype=np.float64))
+
+#     a_shot = np.nan_to_num(np.array(player[shot_features], dtype=np.float64))
+#     b_shot = np.nan_to_num(np.array(team[shot_features], dtype=np.float64)) 
+    
+#     if np.sum(a) == 0 or np.sum(b) == 0:
+#         return {"FinalScore": 0}
+
+#     a_p = a / (np.sum(a) + 1e-9)
+#     b_p = b / (np.sum(b) + 1e-9)
+
+#     shot_fit = float(cosine_similarity(a_shot.reshape(1, -1), b_shot.reshape(1, -1))[0][0])
+
+#     efficiency = float(player.get("efficiency", 0))
+
+#     if precomputed_gap is not None:
+#         gap = precomputed_gap
+#     elif playerdf_all is not None:
+#         gap = compute_team_gap_profile(team, playerdf_all)
+#     else:
+#         gap = np.zeros(len(FINAL_FEATURES))
+
+#     if np.sum(gap) == 0:
+#         gap_fit = 0.5
+#     else:
+#         gap_p = gap / (np.sum(gap) + 1e-9)
+#         gap_fit = float(cosine_similarity(a_p.reshape(1, -1), gap_p.reshape(1, -1))[0][0])
+
+#     # final = 0.35 * shot_fit + 0.25 * opportunity_fit + 0.20 * gap_fit + 0.20 * efficiency
+#     final = 0.45 * shot_fit + 0.25 * gap_fit + 0.30 * efficiency
+
+#     return {
+#         "FinalScore":      float(final),
+#         "ShotFit":         shot_fit,
+#         "GapFit":          gap_fit,
+#         "Efficiency":      efficiency,
+#         "Explanation":     generate_explanation(player, gap, a_p),
+#     }
+
+def compute_match_score_players_for_teams(player, team,precomputed_gap=None, playerdf_all=None):
     a = np.nan_to_num(np.array(player[FINAL_FEATURES], dtype=np.float64))
     b = np.nan_to_num(np.array(team[FINAL_FEATURES], dtype=np.float64))
 
     a_shot = np.nan_to_num(np.array(player[shot_features], dtype=np.float64))
-    b_shot = np.nan_to_num(np.array(team[shot_features], dtype=np.float64)) 
-    
+    b_shot = np.nan_to_num(np.array(team[shot_features], dtype=np.float64))
+
     if np.sum(a) == 0 or np.sum(b) == 0:
         return {"FinalScore": 0}
 
@@ -265,23 +321,11 @@ def compute_match_score(player, team, ts_lo, ts_hi, ts_series,precomputed_gap=No
     b_p = b / (np.sum(b) + 1e-9)
 
     shot_fit = float(cosine_similarity(a_shot.reshape(1, -1), b_shot.reshape(1, -1))[0][0])
-    # opportunity_fit = float(np.sum(np.minimum(a_p, b_p)))
 
-    two_share   = a_p[0] + a_p[1] + a_p[2]
-    three_share = a_p[3] + a_p[4] + a_p[5]
-    # efg = player.get("fg2Pct", 0) * two_share + 1.5 * player.get("fg3Pct", 0) * three_share
-    # efficiency = float(np.clip((efg - efg_lo) / (efg_hi - efg_lo + 1e-9), 0, 1))
-    # eff_raw = player.get("tsPct", 0) + 0.3 * player.get("ortgPlayer", 0) / 100
-    # efficiency = (eff_raw - ts_lo) / (ts_hi - ts_lo + 1e-9)
-    # efficiency = float(np.clip(efficiency, 0, 1))
-    eff_raw = float(player.get("tsPct", 0))
-
-    base_rank = pd.Series(ts_series).rank(method="first")  # guarantees no ties
-    
-    efficiency = float(base_rank.loc[ts_series[ts_series == eff_raw].index[0]])
-    
-    # normalize to 0–1
-    efficiency = efficiency / len(ts_series)
+    # Context efficiency: sigmoid over the percentile-rank difference — natural [0,1], no hard clips
+    player_env = float(player.get("player_env", 0.5))
+    team_env   = float(team.get("team_env", 0.5))
+    context_eff = float(1.0 / (1.0 + np.exp(-7.0 * (player_env - team_env))))
 
     if precomputed_gap is not None:
         gap = precomputed_gap
@@ -296,16 +340,60 @@ def compute_match_score(player, team, ts_lo, ts_hi, ts_series,precomputed_gap=No
         gap_p = gap / (np.sum(gap) + 1e-9)
         gap_fit = float(cosine_similarity(a_p.reshape(1, -1), gap_p.reshape(1, -1))[0][0])
 
-    # final = 0.35 * shot_fit + 0.25 * opportunity_fit + 0.20 * gap_fit + 0.20 * efficiency
-    final = 0.45 * shot_fit + 0.25 * gap_fit + 0.30 * efficiency
+    final = 0.45 * shot_fit + 0.25 * gap_fit + 0.30 * context_eff
 
     return {
-        "FinalScore":      float(final),
-        "ShotFit":         shot_fit,
-        # "OpportunityFit":  opportunity_fit,
-        "GapFit":          gap_fit,
-        "Efficiency":      efficiency,
-        "Explanation":     generate_explanation(player, gap, a_p),
+        "FinalScore":   float(final),
+        "ShotFit":      shot_fit,
+        "GapFit":       gap_fit,
+        "ContextEff":   round(context_eff, 4),
+        "PlayerEnv":    round(player_env, 4),
+        "TeamEnv":      round(team_env, 4),
+        "Explanation":  generate_explanation(player, gap, a_p),
+    }
+
+def compute_match_score_teams_for_players(player, team,precomputed_gap=None, playerdf_all=None):
+    a = np.nan_to_num(np.array(player[FINAL_FEATURES], dtype=np.float64))
+    b = np.nan_to_num(np.array(team[FINAL_FEATURES], dtype=np.float64))
+
+    a_shot = np.nan_to_num(np.array(player[shot_features], dtype=np.float64))
+    b_shot = np.nan_to_num(np.array(team[shot_features], dtype=np.float64))
+    if np.sum(a) == 0 or np.sum(b) == 0:
+        return {"FinalScore": 0}
+
+    a_p = a / (np.sum(a) + 1e-9)
+    b_p = b / (np.sum(b) + 1e-9)
+
+    shot_fit = float(cosine_similarity(a_shot.reshape(1, -1), b_shot.reshape(1, -1))[0][0])
+
+    # Context efficiency: sigmoid over the percentile-rank difference — natural [0,1], no hard clips
+    player_env = float(player.get("player_env", 0.5))
+    team_env   = float(team.get("team_env", 0.5))
+    context_eff = float(1.0 / (1.0 + np.exp(-7.0 * (player_env - team_env))))
+
+    if precomputed_gap is not None:
+        gap = precomputed_gap
+    elif playerdf_all is not None:
+        gap = compute_team_gap_profile(team, playerdf_all)
+    else:
+        gap = np.zeros(len(FINAL_FEATURES))
+
+    if np.sum(gap) == 0:
+        gap_fit = 0.5
+    else:
+        gap_p = gap / (np.sum(gap) + 1e-9)
+        gap_fit = float(cosine_similarity(a_p.reshape(1, -1), gap_p.reshape(1, -1))[0][0])
+
+    final = 0.45 * shot_fit + 0.25 * gap_fit + 0.30 * context_eff
+
+    return {
+        "FinalScore":   float(final),
+        "ShotFit":      shot_fit,
+        "GapFit":       gap_fit,
+        "ContextEff":   round(context_eff, 4),
+        "PlayerEnv":    round(player_env, 4),
+        "TeamEnv":      round(team_env, 4),
+        "Explanation":  generate_explanation(player, gap, a_p),
     }
 
 # helper: parse ?gender= param, default MALE
@@ -321,7 +409,6 @@ def get_team_fit(team_id):
     gender = body.get("gender", request.args.get("gender", "MALE")).upper()
     d = _get_data(gender)
     teamdf, playerdf, playerdf_all = d["teamdf"], d["playerdf"], d["playerdf_all"]
-    ts_lo, ts_hi = d["ts_lo"], d["ts_hi"]
 
     team = teamdf[teamdf["fullName"] == team_id]
     if team.empty:
@@ -329,7 +416,6 @@ def get_team_fit(team_id):
 
     team = team.iloc[0]
     precomputed_gap = compute_team_gap_profile(team, playerdf_all)
-    ts_series = d["ts_series"]
 
     # Read filters from POST body OR query params
     nil_min = body.get("nil_min") or (request.args.get("nil_min") and int(request.args.get("nil_min")))
@@ -355,7 +441,7 @@ def get_team_fit(team_id):
 
     results = []
     for _, player in pool.iterrows():
-        score = compute_match_score(player, team, ts_lo, ts_hi, ts_series,precomputed_gap=precomputed_gap)
+        score = compute_match_score_players_for_teams(player, team, precomputed_gap=precomputed_gap)
         results.append({
             "Player": player["fullName"],
             "PlayerId": player["playerId"],
@@ -388,11 +474,8 @@ def get_player_fit(player_id):
     body = request.get_json(silent=True) or {}
     gender = body.get("gender", request.args.get("gender", "MALE")).upper()
     d = _get_data(gender)
-    teamdf, playerdf, playerdf_all = d["teamdf"], d["playerdf"], d["playerdf_all"]
+    teamdf, teamstatsdf, playerdf, playerdf_all = d["teamdf"], d['teamstatsdf'], d["playerdf"], d["playerdf_all"]
     teamstatsdf = d["teamstatsdf"]
-    ts_lo, ts_hi = d["ts_lo"], d["ts_hi"]
-    ts_series = d["ts_series"]
-
 
     player_row = playerdf[playerdf["fullName"] == player_id]
     if player_row.empty:
@@ -405,33 +488,51 @@ def get_player_fit(player_id):
     conferences = conf_raw if isinstance(conf_raw, list) else [c for c in conf_raw.split(",") if c]
 
     ts_index = teamstatsdf.set_index("teamId")
+    total_teams = len(ts_index)
 
+    # Look up the player's current team net ranking from teamstatsdf
+    old_tid = player.get("teamId")
+    old_net = None
+    if old_tid is not None and old_tid in ts_index.index:
+        v = ts_index.loc[old_tid].get("netRanking")
+        old_net = float(v) if v is not None and pd.notna(v) else None
+
+    # teamdf has FINAL_FEATURES (shot profile) + efficiency; use it as the pool
     pool = teamdf
     if conferences:
         pool = pool[pool["conferenceLongName"].isin(conferences)]
 
     results = []
     for _, team in pool.iterrows():
-        score = compute_match_score(player, team, ts_lo, ts_hi, ts_series,playerdf_all=playerdf_all)
+        score = compute_match_score_teams_for_players(player, team, playerdf_all=playerdf_all)
 
         tid = team["teamId"]
         team_stats = {}
+        new_net = None
         if tid in ts_index.index:
             ts = ts_index.loc[tid]
             for col in TEAM_STAT_COLS:
                 val = ts.get(col) if hasattr(ts, "get") else (ts[col] if col in ts.index else None)
                 team_stats[col] = round(float(val), 3) if val is not None and pd.notna(val) else None
+            v = ts.get("netRanking")
+            new_net = float(v) if v is not None and pd.notna(v) else None
+
+        # Ranking jump: informational only — not factored into FinalScore
+        if old_net is not None and new_net is not None and total_teams > 0:
+            ranking_jump = float(np.clip((old_net - new_net) / total_teams, 0.0, 1.0))
+        else:
+            ranking_jump = 0.0
 
         results.append({
             "Team": team["fullName"],
             "TeamId": tid,
             "Conference": team.get("conferenceLongName") or team.get("conferenceId"),
             **team_stats,
-            **score
+            **score,
+            "RankingJump": round(ranking_jump, 4),
         })
 
     df = pd.DataFrame(results).sort_values("FinalScore", ascending=False)
-    # return jsonify(df.to_dict(orient="records"))
     return jsonify(df.where(df.notna(), other=None).to_dict(orient="records"))
 
 # -----------------------------
@@ -563,8 +664,8 @@ def get_match_score(player_name, team_name):
     d = _get_data(gender)
     teamdf, playerdf, playerdf_all = d["teamdf"], d["playerdf"], d["playerdf_all"]
     teamstatsdf = d["teamstatsdf"]
-    ts_lo, ts_hi = d["ts_lo"], d["ts_hi"]
-    ts_series = d["ts_series"]
+    eff_lo, eff_hi = d["eff_lo"], d["eff_hi"]
+    eff_series = d["eff_series"]
 
     player_row = playerdf[playerdf["fullName"] == player_name]
     if player_row.empty:
@@ -577,12 +678,12 @@ def get_match_score(player_name, team_name):
     player = player_row.iloc[0]
     team   = team_row.iloc[0]
 
-    score = compute_match_score(player, team, ts_lo, ts_hi, ts_series, playerdf_all=playerdf_all)
+    score = compute_match_score_players_for_teams(player, team, playerdf_all=playerdf_all)
 
     # Pull team stats for the prompt
-    ts_index = teamstatsdf.set_index("teamId")
+    eff_index = teamstatsdf.set_index("teamId")
     tid = team["teamId"]
-    t = ts_index.loc[tid] if tid in ts_index.index else None
+    t = eff_index.loc[tid] if tid in eff_index.index else None
 
     def fmt(val, pct=False):
         if val is None or (isinstance(val, float) and np.isnan(val)):
@@ -629,10 +730,10 @@ Team: {team['fullName']} | {record}
 Offensive profile: {team_offense}
 Biggest roster gap: {top_gap}
 
-Match scores: Overall {score['FinalScore']*100:.1f}/100 | Shot Fit {score['ShotFit']*100:.1f}/100 | Gap Fill {score['GapFit']*100:.1f}/100 | Efficiency {score['Efficiency']*100:.1f}/100
+Match scores: Overall {score['FinalScore']*100:.1f}/100 | Shot Fit {score['ShotFit']*100:.1f}/100 | Gap Fill {score['GapFit']*100:.1f}/100 | Efficiency {score['ContextEff']*100:.1f}/100
 
 Explain specifically why this player does or doesn't fit this team — connect the shot profile to the team's style, the gap fill score to the roster need, and the efficiency score to how the player would contribute.
-DO NOT MAKE UP ANY INFORMATION. ONLY USE INFORMATION AND STATS YOU ARE PROVIDED TO CREATE THE REPORT.
+DO NOT MAKE UP ANY INFORMATION. ONLY USE INFORMATION AND STATS YOU ARE PROVIDED TO CREATE THE REPORT. FOR EXAMPLE, DO NOT MENTION ANY PLAYERS ON THE TEAM OR ANYTHING ABOUT THE COACH IF YOU ARE NOT GIVEN THAT INFORMATION. 
 Write the analysis now:"""
 
     try:
