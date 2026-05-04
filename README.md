@@ -13,8 +13,8 @@ A full-stack college basketball analytics tool that matches transfer portal play
 - **Fit scoring**: Cosine shot similarity, histogram intersection opportunity fit, MPG-weighted gap profile, normalized eFG%
 - **Adjustable weights**: Drag sliders to reweight the four scoring dimensions live on the client
 - **NIL valuation**: LightGBM regression model (separate for men's and women's) predicts NIL dollar value and tier (Low / Mid / High) for every portal player
-- **AI scouting reports**: Gemini-generated player scouting reports and team program overviews
-- **Agentic analyst chat**: Ask any question about players or teams — backed by a Gemini function-calling agent with access to live stats
+- **AI scouting reports**: AI-generated player scouting reports and team program overviews
+- **Agentic analyst chat**: Ask any question about players or teams — backed by a function-calling agent with access to live stats
 - **Men's & Women's**: Full support for both, dynamically resolved from the competitions API each season
 - **Filters**: NIL budget (two-way slider), class year, position, conference
 
@@ -25,7 +25,6 @@ A full-stack college basketball analytics tool that matches transfer portal play
 - pandas, numpy, scikit-learn
 - LightGBM (NIL valuation models)
 - Mistral AI API (`mistralai`) — scouting reports + agentic chat
-- Data from cbbanalytics.com API
 
 **Frontend**
 - React (Vite)
