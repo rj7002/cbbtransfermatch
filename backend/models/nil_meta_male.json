@@ -1,15 +1,19 @@
 {
   "features": [
-    "minsPg",
-    "rapm",
+    "ws",
+    "astPg",
+    "rebPg",
+    "usagePct",
+    "fga3Pg",
+    "stlPg",
     "ptsScoredPg",
+    "tsPct",
     "fgaPg",
-    "drapm",
-    "orapm",
-    "dwsP40",
-    "owsP40",
-    "wsP40",
-    "warpP40"
+    "minsPg",
+    "blkPg",
+    "height",
+    "conf_tier",
+    "isDraftProspect"
   ],
   "nil_low_threshold": 200480.00000000003,
   "nil_high_threshold": 1000000.0,
@@ -37,5 +41,6 @@
     62,
     86,
     88
-  ]
+  ],
+  "resid_std": 1.012496004754896
 }

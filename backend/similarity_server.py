@@ -36,6 +36,7 @@ def _load_nil_bundle(gender_lower: str):
         "high":      meta["nil_high_threshold"],
         "top_confs": set(meta.get("conf_tier_top", [])),
         "mid_confs": set(meta.get("conf_tier_mid", [])),
+        "resid_std": meta.get("resid_std", 0.0),
     }
 
 _NIL_BUNDLES = {
@@ -59,6 +60,67 @@ def _find_competition_id(gender: str) -> int:
     if not matches:
         raise RuntimeError(f"No {gender} competition found for startYear={start_year}")
     return matches[0]["competitionId"]
+
+# -----------------------------
+# COURT IMPACT RATING
+# -----------------------------
+CI_PILLARS = {
+    "offense":    {"ptsScoredP40": 0.5, "usagePct": 0.3, "fgaPg": 0.2},
+    "playmaking": {"astPg": 0.5, "astTov": 0.3, "astPct": 0.2},
+    "rebounding": {"orbPct": 0.4, "drbPct": 0.4, "rebPg": 0.2},
+    "defense":    {"drapm": 0.4, "blkPct": 0.2, "stlPct": 0.2, "dwsP40": 0.2},
+    "efficiency": {"tsPct": 0.5, "efgPct": 0.3, "rapm": 0.2},
+    "minutes":    {"minsPg": 1.0},
+}
+CI_WEIGHTS = {
+    "offense":    0.30,
+    "playmaking": 0.15,
+    "rebounding": 0.15,
+    "defense":    0.15,
+    "efficiency": 0.15,
+    "minutes":    0.10,
+}
+CI_KEYS = list(CI_PILLARS.keys())
+
+def _ci_tier(score):
+    if score >= 90: return "National Impact Player"
+    if score >= 75: return "Conference Impact Player"
+    if score >= 60: return "Solid Starter"
+    if score >= 45: return "Rotation Player"
+    return "Developmental Player"
+
+def compute_court_impact(full_statsdf):
+    df = full_statsdf.copy()
+    for col in [c for cat in CI_PILLARS.values() for c in cat] + ["minsPg"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    df = df[df["minsPg"].fillna(0) >= 8].copy()
+    df["pos_group"] = df.get("position", pd.Series("F", index=df.index)).astype(str).str.upper().apply(
+        lambda p: "G" if "G" in p else "F"
+    )
+    df["playerId"] = pd.to_numeric(df["playerId"], errors="coerce")
+    result = df[["playerId"]].copy()
+
+    pillar_scores = {}
+    for pillar, weights in CI_PILLARS.items():
+        score = pd.Series(0.0, index=df.index)
+        total_w = 0.0
+        for stat, w in weights.items():
+            if stat not in df.columns:
+                continue
+            pct = df.groupby("pos_group")[stat].rank(pct=True, na_option="keep").fillna(0.5)
+            score += pct * w
+            total_w += w
+        if total_w > 0:
+            score /= total_w
+        pillar_scores[pillar] = score
+        result[f"ci_{pillar}"] = (score * 99 + 1).round(0).astype(int)
+
+    raw = sum(pillar_scores[k] * w for k, w in CI_WEIGHTS.items() if k in pillar_scores)
+    result["courtImpact"]     = (raw * 99 + 1).round(0).astype(int)
+    result["courtImpactTier"] = result["courtImpact"].apply(_ci_tier)
+    return result
 
 # -----------------------------
 # LOAD DATA PER GENDER
@@ -85,9 +147,10 @@ def load_gender_data(gender: str):
     teamdf = teamdf[teamdf["isOffense"] == True]
     playerdf_all = pd.DataFrame(requests.get(player_url).json())
 
-    statsdf = pd.DataFrame(requests.get(stats_url).json())
+    full_statsdf = pd.DataFrame(requests.get(stats_url).json())
+    grade_df = compute_court_impact(full_statsdf)
     keep_cols = list(set(["playerId", "conferenceId"] + STAT_COLS + nil_features))
-    statsdf = statsdf[[c for c in keep_cols if c in statsdf.columns]]
+    statsdf = full_statsdf[[c for c in keep_cols if c in full_statsdf.columns]]
 
     playerdf_all["mpg"] = playerdf_all["minsPbp"] / playerdf_all["gpPbp"]
     playerdf_all["mpg"] = playerdf_all["mpg"].replace([np.inf, -np.inf], 0).fillna(0)
@@ -113,9 +176,12 @@ def load_gender_data(gender: str):
 
     # NIL regression — log scale, back to dollars, tiers from gender-specific thresholds
     nil_X = playerdf.reindex(columns=nil_features).apply(pd.to_numeric, errors="coerce").fillna(0)
-    raw_preds = np.expm1(nil["reg"].predict(nil_X))
-    playerdf["nilValue"] = raw_preds.round(0).astype(int)
-    playerdf["nilTier"]  = playerdf["nilValue"].apply(
+    pred_log = nil["reg"].predict(nil_X)
+    half_std = nil.get("resid_std", 0.0) * 0.25
+    playerdf["nilValue"]     = np.expm1(pred_log).round(0).astype(int)
+    playerdf["nilValueLow"]  = np.expm1(pred_log - half_std).round(0).astype(int)
+    playerdf["nilValueHigh"] = np.expm1(pred_log + half_std).round(0).astype(int)
+    playerdf["nilTier"]      = playerdf["nilValue"].apply(
         lambda v: "High Value" if v >= nil["high"] else ("Mid Value" if v >= nil["low"] else "Low Value")
     )
 
@@ -129,9 +195,13 @@ def load_gender_data(gender: str):
     eff_hi = player_eff_series.quantile(0.95)
 
     # Build shot features
-    teamdf_f     = pd.concat([teamdf,      build_features(teamdf)],      axis=1)
-    playerdf_f   = pd.concat([playerdf,    build_features(playerdf)],    axis=1)
+    teamdf_f       = pd.concat([teamdf,       build_features(teamdf)],       axis=1)
+    playerdf_f     = pd.concat([playerdf,     build_features(playerdf)],     axis=1)
     playerdf_all_f = pd.concat([playerdf_all, build_features(playerdf_all)], axis=1)
+
+    # Merge position-based percentile grades (computed from all D1 players)
+    playerdf_f["playerId"] = pd.to_numeric(playerdf_f["playerId"], errors="coerce")
+    playerdf_f = playerdf_f.merge(grade_df, on="playerId", how="left")
 
     teamstatsdf["fullName"] = teamstatsdf["teamMarket"] + " " + teamstatsdf["teamName"]
     teamstatsdf_offense = teamstatsdf[teamstatsdf["isOffense"] == True].copy()
@@ -139,6 +209,23 @@ def load_gender_data(gender: str):
     # Team environment index: percentile rank of ortg * efgPct (no constants)
     team_eff_raw = teamstatsdf_offense["ortg"] * teamstatsdf_offense["efgPct"]
     teamstatsdf_offense["team_env"] = team_eff_raw.rank(pct=True)
+
+    # SOS adjustment: use sos column from teamstatsdf if present.
+    # Percentile rank → ±5% multiplier on courtImpact.
+    if {"sos", "teamId"}.issubset(teamstatsdf_offense.columns):
+        ts_sos = teamstatsdf_offense[["teamId", "sos"]].copy()
+        ts_sos["sos"] = pd.to_numeric(ts_sos["sos"], errors="coerce")
+        ts_sos["sos_pct"] = ts_sos["sos"].rank(pct=True)
+        teamid_sos = ts_sos.set_index("teamId")["sos_pct"]
+
+        playerdf_f["_sos_pct"] = pd.to_numeric(playerdf_f["teamId"], errors="coerce").map(teamid_sos).fillna(0.5)
+        sos_factor = (playerdf_f["_sos_pct"] - 0.5) * 0.10
+        playerdf_f["courtImpact"] = (
+            playerdf_f["courtImpact"].fillna(50) * (1 + sos_factor)
+        ).clip(1, 100).round(0).astype(int)
+        playerdf_f["courtImpactTier"] = playerdf_f["courtImpact"].apply(_ci_tier)
+        playerdf_f["scheduleAdj"] = (sos_factor * 100).round(1)
+        playerdf_f.drop(columns=["_sos_pct"], inplace=True)
 
     # Merge team_env onto teamdf_f so match score functions can access it
     teamdf_f["team_env"] = teamdf_f["teamId"].map(
@@ -449,9 +536,16 @@ def get_team_fit(team_id):
             "Position": player["position"],
             "Year": player["classYr"],
             "PrevTeam": player["teamFullName"],
-            "NilTier": player.get("nilTier"),
-            "NilValue": int(player["nilValue"]) if pd.notna(player.get("nilValue")) else None,
+            "NilTier":      player.get("nilTier"),
+            "NilValue":     int(player["nilValue"])     if pd.notna(player.get("nilValue"))     else None,
+            "NilValueLow":  int(player["nilValueLow"])  if pd.notna(player.get("nilValueLow"))  else None,
+            "NilValueHigh": int(player["nilValueHigh"]) if pd.notna(player.get("nilValueHigh")) else None,
             **{c: round(float(player[c]), 3) if pd.notna(player.get(c)) else None for c in STAT_COLS},
+            **{f"ci{k.capitalize()}": int(player[f"ci_{k}"]) if pd.notna(player.get(f"ci_{k}")) else None for k in CI_KEYS},
+            "courtImpact":     int(player["courtImpact"])     if pd.notna(player.get("courtImpact"))     else None,
+            "courtImpactTier": player.get("courtImpactTier"),
+            "scheduleAdj":     round(float(player["scheduleAdj"]), 1) if pd.notna(player.get("scheduleAdj")) else None,
+            "TargetTeamId": int(team["teamId"]),
             **score
         })
 
@@ -527,6 +621,7 @@ def get_player_fit(player_id):
             "Team": team["fullName"],
             "TeamId": tid,
             "Conference": team.get("conferenceLongName") or team.get("conferenceId"),
+            "TargetPlayerId": int(player["playerId"]),
             **team_stats,
             **score,
             "RankingJump": round(ranking_jump, 4),
@@ -536,6 +631,57 @@ def get_player_fit(player_id):
     return jsonify(df.where(df.notna(), other=None).to_dict(orient="records"))
 
 # -----------------------------
+# SHOT CHART DIFF
+# -----------------------------
+@app.route("/shot-chart/<gender>")
+def shot_chart(gender):
+    g = gender.upper()
+    player_id = request.args.get("playerId", type=int)
+    team_id   = request.args.get("teamId",   type=int)
+    if player_id is None or team_id is None:
+        return jsonify({"error": "playerId and teamId required"}), 400
+
+    data = _get_data(g)
+    playerdf = data["playerdf"]
+    teamdf   = data["teamdf"]
+
+    pr = playerdf[playerdf["playerId"] == player_id]
+    tr = teamdf[teamdf["teamId"] == team_id]
+    if pr.empty or tr.empty:
+        return jsonify({"error": "not found"}), 404
+
+    player = pr.iloc[0]
+    team   = tr.iloc[0]
+
+    # These 11 zones are the complete non-overlapping partition (sum = 1.0).
+    # lane2=atr2+paint2, mid2=lb2+rb2+le2+re2, c3=lc3+rc3, atb3=lw3+rw3+tok3 are all aggregates.
+    # med2/lng2/sht3/nba3/lng3 are distance subdivisions that overlap positional zones.
+    ZONE_LABELS = [
+        ("atr2FgaFreq",   "At Rim"),
+        ("paint2FgaFreq", "Paint"),
+        ("lb2FgaFreq",    "Left Block"),
+        ("rb2FgaFreq",    "Right Block"),
+        ("le2FgaFreq",    "Left Elbow"),
+        ("re2FgaFreq",    "Right Elbow"),
+        ("lc3FgaFreq",    "Left Corner 3"),
+        ("rc3FgaFreq",    "Right Corner 3"),
+        ("lw3FgaFreq",    "Left Wing 3"),
+        ("rw3FgaFreq",    "Right Wing 3"),
+        ("tok3FgaFreq",   "Top of Key 3"),
+    ]
+    zones = []
+    for feat, label in ZONE_LABELS:
+        p = float(player.get(feat) or 0)
+        t = float(team.get(feat)   or 0)
+        zones.append({
+            "id":        feat,
+            "label":     label,
+            "playerPct": round(p * 100, 1),
+            "teamPct":   round(t * 100, 1),
+            "diff":      round((p - t) * 100, 1),
+        })
+    return jsonify({"zones": zones})
+
 # TEAM NEEDS
 # -----------------------------
 @app.route("/get_team_needs/<team_id>")
@@ -584,9 +730,13 @@ def get_player_overview(player_name):
         for f in FINAL_FEATURES
     )
 
+    gender = _gender_param()
+    pronoun = "she/her" if gender == "FEMALE" else "he/him"
+
     prompt = f"""You are an expert college basketball analyst. Write a 3-4 sentence scouting report for this transfer portal player. Be specific, analytical, and direct. No fluff.
 
 Player: {p['fullName']}
+Gender: {gender.capitalize()} ({pronoun} pronouns)
 Position: {p.get('position','N/A')} | Height (inches): {p.get('height','N/A')} | Year: {p.get('classYr','N/A')} | Previous team: {p.get('teamFullName','N/A')}
 
 Per-game stats: {fmt(p.get('ptsScoredPg'))} pts, {fmt(p.get('rebPg'))} reb, {fmt(p.get('astPg'))} ast, {fmt(p.get('stlPg'))} stl, {fmt(p.get('blkPg'))} blk, {fmt(p.get('tovPg'))} tov
@@ -631,8 +781,12 @@ def get_team_overview(team_name):
     record    = f"{int(t.get('overallWins', 0))}-{int(t.get('overallLosses', 0))}"
     conf_rec  = f"{int(t.get('confWins', 0))}-{int(t.get('confLosses', 0))}"
 
+    gender = _gender_param()
+    sport = "women's college basketball" if gender == "FEMALE" else "men's college basketball"
+
     prompt = f"""You are an expert college basketball analyst. Write a 3-4 sentence program overview for a player who is considering transferring to the program. Focus on the team's offensive identity, defensive profile, and overall playstyle. Be specific and analytical. No fluff.
 
+Sport: {sport}
 Team: {t['fullName']}
 Record: {record} overall, {conf_rec} conference | NET Ranking: {t.get('netRanking', 'N/A')}
 Pace: {fmt(t.get('pace'))} possessions/40 min
@@ -654,6 +808,62 @@ Write the program overview now:"""
         return jsonify({"overview": overview})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+# -----------------------------
+# ENTITY STATS (banner data)
+# -----------------------------
+@app.route("/get_entity_stats")
+def get_entity_stats():
+    gender = request.args.get("gender", "MALE").upper()
+    entity_type = request.args.get("type", "team").lower()
+    name = request.args.get("name", "")
+    d = _get_data(gender)
+
+    def _v(row, col, is_int=False):
+        val = row.get(col) if hasattr(row, "get") else (row[col] if col in row.index else None)
+        if val is None or not pd.notna(val):
+            return None
+        return int(val) if is_int else round(float(val), 3)
+
+    if entity_type == "team":
+        row = d["teamstatsdf"][d["teamstatsdf"]["fullName"] == name]
+        if row.empty:
+            return jsonify({"error": "not found"}), 404
+        t = row.iloc[0]
+        result = {"fullName": name}
+        result["teamId"] = _v(t, "teamId", is_int=True)
+        for col in ["ptsScoredPg", "ortg", "drtg", "netRtg", "pace",
+                    "efgPct", "fg3Pct", "rebPg", "astPg", "tovPg"]:
+            result[col] = _v(t, col)
+        return jsonify(result)
+
+    if entity_type == "player":
+        row = d["playerdf"][d["playerdf"]["fullName"] == name]
+        if row.empty:
+            return jsonify({"error": "not found"}), 404
+        p = row.iloc[0]
+        result = {
+            "fullName":     name,
+            "playerId":     _v(p, "playerId", is_int=True),
+            "teamId":       _v(p, "teamId",   is_int=True),
+            "position":     p.get("position"),
+            "classYr":      p.get("classYr"),
+            "teamFullName": p.get("teamFullName"),
+        }
+        for col in STAT_COLS:
+            result[col] = _v(p, col)
+        result["nilValue"]        = _v(p, "nilValue",    is_int=True)
+        result["nilValueLow"]     = _v(p, "nilValueLow", is_int=True)
+        result["nilValueHigh"]    = _v(p, "nilValueHigh",is_int=True)
+        result["nilTier"]         = p.get("nilTier")
+        result["courtImpact"]     = _v(p, "courtImpact", is_int=True)
+        result["courtImpactTier"] = p.get("courtImpactTier")
+        result["scheduleAdj"]     = _v(p, "scheduleAdj")
+        for k in CI_KEYS:
+            result[f"ci{k.capitalize()}"] = _v(p, f"ci_{k}", is_int=True)
+        return jsonify(result)
+
+    return jsonify({"error": "invalid type"}), 400
 
 # -----------------------------
 # MATCH SCORE (player × team)
@@ -720,9 +930,11 @@ def get_match_score(player_name, team_name):
             if net is not None:
                 record += f", NET #{int(net)}"
 
-    prompt = f"""You are an expert college basketball analyst. Analyze this player-team transfer fit in 3-4 sentences. Be specific and analytical — reference the actual numbers. No fluff.   
+    pronoun = "she/her" if gender == "FEMALE" else "he/him"
 
-Player: {player['fullName']} | {gender}| {player.get('position','N/A')} | {player.get('classYr','N/A')} | From: {player.get('teamFullName','N/A')}
+    prompt = f"""You are an expert college basketball analyst. Analyze this player-team transfer fit in 3-4 sentences. Be specific and analytical — reference the actual numbers. No fluff.
+
+Player: {player['fullName']} | {gender} ({pronoun} pronouns) | {player.get('position','N/A')} | {player.get('classYr','N/A')} | From: {player.get('teamFullName','N/A')}
 Stats: {fmt(player.get('ptsScoredPg'))} pts, {fmt(player.get('rebPg'))} reb, {fmt(player.get('astPg'))} ast | FG {fmt(player.get('fgPct'), pct=True)}, 3P {fmt(player.get('fg3Pct'), pct=True)}, TS% {fmt(player.get('tsPct'), pct=True)}
 Shot profile: {shot_profile}
 
@@ -732,7 +944,7 @@ Biggest roster gap: {top_gap}
 
 Match scores: Overall {score['FinalScore']*100:.1f}/100 | Shot Fit {score['ShotFit']*100:.1f}/100 | Gap Fill {score['GapFit']*100:.1f}/100 | Efficiency {score['ContextEff']*100:.1f}/100
 
-Explain specifically why this player does or doesn't fit this team — connect the shot profile to the team's style, the gap fill score to the roster need, and the efficiency score to how the player would contribute.
+Explain specifically why this player does or doesn't fit this team — connect the shot profile to the team's style, the gap fill score to the roster need, and the context fit score to how the player would contribute.
 DO NOT MAKE UP ANY INFORMATION. ONLY USE INFORMATION AND STATS YOU ARE PROVIDED TO CREATE THE REPORT. FOR EXAMPLE, DO NOT MENTION ANY PLAYERS ON THE TEAM OR ANYTHING ABOUT THE COACH IF YOU ARE NOT GIVEN THAT INFORMATION. 
 Write the analysis now:"""
 
@@ -757,7 +969,9 @@ Write the analysis now:"""
         "Position":     player.get("position"),
         "Year":         player.get("classYr"),
         "PrevTeam":     player.get("teamFullName"),
-        "NilValue":     int(player["nilValue"]) if pd.notna(player.get("nilValue")) else None,
+        "NilValue":     int(player["nilValue"])     if pd.notna(player.get("nilValue"))     else None,
+        "NilValueLow":  int(player["nilValueLow"])  if pd.notna(player.get("nilValueLow"))  else None,
+        "NilValueHigh": int(player["nilValueHigh"]) if pd.notna(player.get("nilValueHigh")) else None,
         "NilTier":      player.get("nilTier"),
         "Team":         team["fullName"],
         "TeamId":       _to_py(tid),
@@ -790,6 +1004,8 @@ PLAYER_STAT_FIELDS = {
     "corner3_freq": "frequency of corner three shots (0-1)",
     "atb3_freq": "frequency of above-the-break three shots (0-1)",
     "deep3_freq": "frequency of deep three shots (0-1)",
+    "courtImpact": "Player Index 1-100 (overall player value, position-adjusted, SOS-adjusted)",
+    "nilValue": "estimated NIL value in dollars (e.g. 50000 = $50K)",
 }
 
 TEAM_STAT_FIELDS = {
@@ -881,6 +1097,8 @@ Rules:
 - For fg3Pct: "efficient from three" ≈ min 0.36, "very efficient" ≈ min 0.39
 - For tsPct: "efficient scorer" ≈ min 0.56, "very efficient" ≈ min 0.60
 - "tall guard" = position G, height_min ~75 (6'3")
+- For courtImpact (Player Index): "elite" ≈ min 80, "good" ≈ min 65, "starter" ≈ min 55
+- For nilValue: "high NIL" ≈ min 100000, "six figures" ≈ min 100000, "$50K+" → min 50000
 - Return ONLY valid JSON, no markdown, no explanation.
 
 Example output:
@@ -984,8 +1202,14 @@ Example output:
                 "Year":       p.get("classYr"),
                 "PrevTeam":   p.get("teamFullName"),
                 "Conference": p.get("conferenceLongName"),
-                "NilTier":    p.get("nilTier"),
-                "NilValue":   int(p["nilValue"]) if pd.notna(p.get("nilValue")) else None,
+                "NilTier":      p.get("nilTier"),
+                "NilValue":     int(p["nilValue"])     if pd.notna(p.get("nilValue"))     else None,
+                "NilValueLow":  int(p["nilValueLow"])  if pd.notna(p.get("nilValueLow"))  else None,
+                "NilValueHigh": int(p["nilValueHigh"]) if pd.notna(p.get("nilValueHigh")) else None,
+                **{f"ci{k.capitalize()}": int(p[f"ci_{k}"]) if pd.notna(p.get(f"ci_{k}")) else None for k in CI_KEYS},
+                "courtImpact":     int(p["courtImpact"])     if pd.notna(p.get("courtImpact"))     else None,
+                "courtImpactTier": p.get("courtImpactTier"),
+                "scheduleAdj":     round(float(p["scheduleAdj"]), 1) if pd.notna(p.get("scheduleAdj")) else None,
                 **{c: round(float(p[c]), 3) if pd.notna(p.get(c)) else None for c in STAT_COLS},
                 "FinalScore": 0,
             })
@@ -1065,6 +1289,15 @@ Example output:
 # -----------------------------
 # LISTS (for search dropdowns)
 # -----------------------------
+@app.route("/debug/columns")
+def debug_columns():
+    d = _get_data(_gender_param())
+    return jsonify({
+        "teamdf":      sorted(d["teamdf"].columns.tolist()),
+        "teamstatsdf": sorted(d["teamstatsdf"].columns.tolist()),
+        "playerdf":    sorted(d["playerdf"].columns.tolist()),
+    })
+
 @app.route("/get_teams")
 def get_teams():
     d = _get_data(_gender_param())

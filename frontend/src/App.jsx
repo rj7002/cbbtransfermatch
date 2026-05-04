@@ -206,6 +206,150 @@ function InfoTooltip({ scoreKey }) {
   )
 }
 
+function fmtNil(v) {
+  if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`
+  if (v >= 1_000)     return `${Math.round(v / 1_000)}K`
+  return `${v}`
+}
+
+const CI_PILLARS = [
+  { key: 'ciOffense',    label: 'Offense',    weight: '30%' },
+  { key: 'ciPlaymaking', label: 'Playmaking', weight: '15%' },
+  { key: 'ciRebounding', label: 'Rebounding', weight: '15%' },
+  { key: 'ciDefense',    label: 'Defense',    weight: '15%' },
+  { key: 'ciEfficiency', label: 'Efficiency', weight: '15%' },
+  { key: 'ciMinutes',    label: 'Minutes',    weight: '10%' },
+]
+
+function ciColor(score) {
+  if (score >= 90) return '#4ade80'
+  if (score >= 75) return '#a3e635'
+  if (score >= 60) return '#facc15'
+  if (score >= 45) return '#fb923c'
+  return '#f87171'
+}
+
+function CourtImpactWidget({ player, compact }) {
+  const score = player.courtImpact
+  if (!score) return null
+  if (compact) {
+    return (
+      <div className="ci-compact">
+        <span className="ci-compact-label">Player Index</span>
+        <span className="ci-compact-score" style={{ color: ciColor(score) }}>{score}</span>
+        <span className="ci-compact-tier">{player.courtImpactTier}</span>
+      </div>
+    )
+  }
+  return (
+    <div className="ci-widget">
+      <div className="ci-header">
+        <div>
+          <div className="ci-title">Player Index</div>
+          <div className="ci-tier" style={{ color: ciColor(score) }}>{player.courtImpactTier}</div>
+        </div>
+        <div className="ci-score-block">
+          <span className="ci-score" style={{ color: ciColor(score) }}>{score}</span>
+          <span className="ci-denom">/100</span>
+        </div>
+      </div>
+      <div className="ci-pillars">
+        {CI_PILLARS.map(({ key, label, weight }) => {
+          const val = player[key] ?? 0
+          return (
+            <div key={key} className="ci-pillar">
+              <div className="ci-pillar-row">
+                <span className="ci-pillar-label">{label}</span>
+                <span className="ci-pillar-weight">{weight}</span>
+                <span className="ci-pillar-val" style={{ color: ciColor(val) }}>{val}</span>
+              </div>
+              <div className="ci-bar-track">
+                <div className="ci-bar-fill" style={{ width: `${val}%`, background: ciColor(val) }}/>
+              </div>
+            </div>
+          )
+        })}
+        {player.scheduleAdj != null && (
+          <div className="ci-sos-row">
+            <span className="ci-sos-label">Schedule Adj (SOS)</span>
+            <span className="ci-sos-val" style={{ color: player.scheduleAdj >= 0 ? '#4ade80' : '#f87171' }}>
+              {player.scheduleAdj >= 0 ? '+' : ''}{player.scheduleAdj}%
+            </span>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function SubjectBanner({ data, mode }) {
+  if (!data) return null
+
+  if (mode === 'team') {
+    return (
+      <div className="subject-banner subject-banner--team">
+        <div className="subject-banner-left">
+          <TeamLogo teamId={data.teamId} name={data.fullName} size="lg" />
+          <div className="subject-banner-name">{data.fullName}</div>
+        </div>
+        <div className="subject-banner-stats">
+          <StatPill label="PPG"  value={data.ptsScoredPg} />
+          <StatPill label="ORtg" value={data.ortg} />
+          <StatPill label="DRtg" value={data.drtg} />
+          <StatPill label="Net"  value={data.netRtg} />
+          <StatPill label="Pace" value={data.pace} />
+          <StatPill label="eFG%" value={data.efgPct} isPercent />
+          <StatPill label="3P%"  value={data.fg3Pct}  isPercent />
+          <StatPill label="REB"  value={data.rebPg} />
+          <StatPill label="AST"  value={data.astPg} />
+          <StatPill label="TOV"  value={data.tovPg} />
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="subject-banner subject-banner--player">
+      <div className="subject-banner-left">
+        <PlayerAvatar teamId={data.teamId} playerId={data.playerId} name={data.fullName} size="lg" />
+        <div className="subject-banner-info">
+          <div className="subject-banner-name">{data.fullName}</div>
+          <div className="subject-banner-sub">
+            {[data.position, data.classYr, data.teamFullName].filter(Boolean).join(' · ')}
+          </div>
+          {(data.nilValueLow != null || data.nilValue != null) && (
+            <div className="subject-banner-nil">
+              {data.nilValueLow != null && data.nilValueHigh != null
+                ? `$${fmtNil(data.nilValueLow)} – $${fmtNil(data.nilValueHigh)}`
+                : `~$${fmtNil(data.nilValue)}`}
+              {data.nilTier && (
+                <span className={`badge badge--nil badge--nil-${data.nilTier.split(' ')[0].toLowerCase()}`}>
+                  {data.nilTier}
+                </span>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+      <div className="subject-banner-right">
+        <CourtImpactWidget player={data} />
+        <div className="subject-banner-stats">
+          <StatPill label="PTS" value={data.ptsScoredPg} />
+          <StatPill label="REB" value={data.rebPg} />
+          <StatPill label="AST" value={data.astPg} />
+          <StatPill label="STL" value={data.stlPg} />
+          <StatPill label="BLK" value={data.blkPg} />
+          <StatPill label="TOV" value={data.tovPg} />
+          <StatPill label="FG%"  value={data.fgPct}  isPercent />
+          <StatPill label="2P%"  value={data.fg2Pct} isPercent />
+          <StatPill label="3P%"  value={data.fg3Pct} isPercent />
+          <StatPill label="FT%"  value={data.ftPct}  isPercent />
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function scoreColor(val) {
   const v = Math.max(0, Math.min(1, val))
   if (v < 0.5) {
@@ -231,9 +375,127 @@ function ScoreBar({ label, value, scoreKey }) {
   )
 }
 
+// Label anchor points for each zone (SVG coords)
+const ZONE_LABEL_POS = {
+  atr2FgaFreq:   [200, 44],
+  paint2FgaFreq: [200, 118],
+  lb2FgaFreq:    [90,  52],
+  rb2FgaFreq:    [310, 52],
+  le2FgaFreq:    [82,  160],
+  re2FgaFreq:    [318, 160],
+  lc3FgaFreq:    [13,  38],
+  rc3FgaFreq:    [387, 38],
+  lw3FgaFreq:    [48,  172],
+  rw3FgaFreq:    [352, 172],
+  tok3FgaFreq:   [200, 236],
+}
+
+function zoneDiffColor(diff) {
+  const abs = Math.abs(diff)
+  if (diff > 3)  return `rgba(59,130,246,${Math.min(0.3 + abs * 0.022, 0.82)})`
+  if (diff < -3) return `rgba(239,68,68,${Math.min(0.3 + abs * 0.022, 0.82)})`
+  return 'rgba(34,197,94,0.42)'
+}
+
+function ShotChartDiff({ zones }) {
+  if (!zones?.length) return null
+  const zMap = Object.fromEntries(zones.map(z => [z.id, z]))
+  const col  = id => zoneDiffColor(zMap[id]?.diff ?? 0)
+
+  return (
+    <div className="shot-chart-wrap">
+      <div className="shot-chart-title">Shot Zone Breakdown <span className="shot-chart-sub">player % / team %</span></div>
+      <svg viewBox="0 0 400 258" className="shot-chart-svg">
+        <defs>
+          {/* area enclosed by the 3pt line (2pt territory) */}
+          <clipPath id="sc-i3">
+            <path d="M 27,0 L 27,79 A 177,177 0 0,0 373,79 L 373,0 Z"/>
+          </clipPath>
+          {/* area outside the 3pt arc within the half-court */}
+          <clipPath id="sc-o3">
+            <path clipRule="evenodd" d="M 0,0 L 400,0 L 400,258 L 0,258 Z M 27,0 L 27,79 A 177,177 0 0,0 373,79 L 373,0 Z"/>
+          </clipPath>
+        </defs>
+
+        <rect width="400" height="258" fill="#090912" rx="6"/>
+
+        {/* corner 3s — simple rectangles outside the 3pt straights */}
+        <rect x="0"   y="0" width="27" height="79" fill={col('lc3FgaFreq')}/>
+        <rect x="373" y="0" width="27" height="79" fill={col('rc3FgaFreq')}/>
+
+        {/* wing / top-of-key 3s — outside the arc, divided at x=133 and x=267 */}
+        <g clipPath="url(#sc-o3)">
+          <rect x="0"   y="79" width="133" height="179" fill={col('lw3FgaFreq')}/>
+          <rect x="133" y="79" width="134" height="179" fill={col('tok3FgaFreq')}/>
+          <rect x="267" y="79" width="133" height="179" fill={col('rw3FgaFreq')}/>
+        </g>
+
+        {/* 2pt zones — all clipped to inside the arc */}
+        <g clipPath="url(#sc-i3)">
+          {/* left/right baseline mid-range (below y=96) */}
+          <rect x="0"   y="0"  width="152" height="96"  fill={col('lb2FgaFreq')}/>
+          <rect x="248" y="0"  width="152" height="96"  fill={col('rb2FgaFreq')}/>
+          {/* left/right elbow mid-range (above y=96) */}
+          <rect x="0"   y="96" width="152" height="162" fill={col('le2FgaFreq')}/>
+          <rect x="248" y="96" width="152" height="162" fill={col('re2FgaFreq')}/>
+          {/* center strip — paint + area above FT line inside arc */}
+          <rect x="152" y="0"  width="96"  height="258" fill={col('paint2FgaFreq')}/>
+        </g>
+
+        {/* at-rim circle drawn on top of paint2 */}
+        <circle cx="200" cy="42" r="32" fill={col('atr2FgaFreq')}/>
+
+        {/* zone labels */}
+        {zones.map(zone => {
+          const pos = ZONE_LABEL_POS[zone.id]
+          if (!pos) return null
+          return (
+            <g key={zone.id}>
+              <text x={pos[0]} y={pos[1]} textAnchor="middle"
+                fill="white" fontSize="8.5" fontWeight="700" fontFamily="Inter,sans-serif">
+                {zone.playerPct}%
+              </text>
+              <text x={pos[0]} y={pos[1] + 10} textAnchor="middle"
+                fill="rgba(255,255,255,0.55)" fontSize="8" fontFamily="Inter,sans-serif">
+                {zone.teamPct}%
+              </text>
+            </g>
+          )
+        })}
+
+        {/* zone division lines + court markings drawn last */}
+        {/* implicit zone boundaries */}
+        <line x1="0"   y1="79" x2="27"  y2="79"  stroke="rgba(0,0,0,0.6)" strokeWidth="1.2"/>
+        <line x1="373" y1="79" x2="400" y2="79"  stroke="rgba(0,0,0,0.6)" strokeWidth="1.2"/>
+        <line x1="27"  y1="96" x2="152" y2="96"  stroke="rgba(0,0,0,0.6)" strokeWidth="1.2"/>
+        <line x1="248" y1="96" x2="373" y2="96"  stroke="rgba(0,0,0,0.6)" strokeWidth="1.2"/>
+        <g clipPath="url(#sc-o3)">
+          <line x1="133" y1="79" x2="133" y2="258" stroke="rgba(0,0,0,0.6)" strokeWidth="1.2"/>
+          <line x1="267" y1="79" x2="267" y2="258" stroke="rgba(0,0,0,0.6)" strokeWidth="1.2"/>
+        </g>
+        {/* court lines */}
+        <line x1="0" y1="1" x2="400" y2="1" stroke="rgba(0,0,0,0.7)" strokeWidth="2"/>
+        <rect x="152" y="0" width="96" height="152" fill="none" stroke="rgba(0,0,0,0.7)" strokeWidth="1.5"/>
+        <path d="M 152,152 A 48,48 0 0,1 248,152" fill="none" stroke="rgba(0,0,0,0.7)" strokeWidth="1.5"/>
+        <path d="M 152,152 A 48,48 0 0,0 248,152" fill="none" stroke="rgba(0,0,0,0.4)" strokeWidth="1" strokeDasharray="4 3"/>
+        <circle cx="200" cy="42" r="32" fill="none" stroke="rgba(0,0,0,0.7)" strokeWidth="1.5"/>
+        <circle cx="200" cy="42" r="7"  fill="none" stroke="rgba(0,0,0,0.8)" strokeWidth="2"/>
+        <line x1="183" y1="32" x2="217" y2="32" stroke="rgba(0,0,0,0.8)" strokeWidth="2.5"/>
+        <path d="M 27,0 L 27,79 A 177,177 0 0,0 373,79 L 373,0" fill="none" stroke="rgba(0,0,0,0.7)" strokeWidth="1.5"/>
+      </svg>
+      <div className="shot-chart-legend">
+        <div className="scl-item"><span className="scl-dot scl-dot--blue"/>Player shoots more</div>
+        <div className="scl-item"><span className="scl-dot scl-dot--green"/>Similar</div>
+        <div className="scl-item"><span className="scl-dot scl-dot--red"/>Team shoots more</div>
+      </div>
+    </div>
+  )
+}
+
 function DetailPanel({ item, mode, gender, onClose }) {
   const [overview, setOverview] = useState(null)
   const [overviewLoading, setOverviewLoading] = useState(false)
+  const [shotChart, setShotChart] = useState(null)
 
   const name = mode === 'team' ? item.Player : item.Team
 
@@ -257,6 +519,19 @@ function DetailPanel({ item, mode, gender, onClose }) {
     load()
     return () => { cancelled = true }
   }, [name, mode, gender])
+
+  useEffect(() => {
+    const playerId = mode === 'team' ? item.PlayerId    : item.TargetPlayerId
+    const teamId   = mode === 'team' ? item.TargetTeamId : item.TeamId
+    if (!playerId || !teamId) { setShotChart(null); return }
+    let cancelled = false
+    setShotChart(null)
+    fetch(`${API}/shot-chart/${gender}?playerId=${playerId}&teamId=${teamId}`)
+      .then(r => r.json())
+      .then(d => { if (!cancelled) setShotChart(d.zones || null) })
+      .catch(() => { if (!cancelled) setShotChart(null) })
+    return () => { cancelled = true }
+  }, [item.PlayerId, item.TargetTeamId, item.TargetPlayerId, item.TeamId, mode, gender])
 
   const radarData = Object.entries(SCORE_LABELS).map(([key, label]) => ({
     subject: label,
@@ -310,23 +585,43 @@ function DetailPanel({ item, mode, gender, onClose }) {
       )}
 
       {mode === 'team' && (
-        <div className="detail-stats">
-          <StatPill label="PTS"  value={item.ptsScoredPg} />
-          <StatPill label="REB"  value={item.rebPg} />
-          <StatPill label="AST"  value={item.astPg} />
-          <StatPill label="STL"  value={item.stlPg} />
-          <StatPill label="BLK"  value={item.blkPg} />
-          <StatPill label="TOV"  value={item.tovPg} />
-          <StatPill label="FG%"  value={item.fgPct}  isPercent />
-          <StatPill label="2P%"  value={item.fg2Pct} isPercent />
-          <StatPill label="3P%"  value={item.fg3Pct} isPercent />
-          <StatPill label="FT%"  value={item.ftPct}  isPercent />
-        </div>
+        <>
+          <div className="detail-stats">
+            <StatPill label="PTS"  value={item.ptsScoredPg} />
+            <StatPill label="REB"  value={item.rebPg} />
+            <StatPill label="AST"  value={item.astPg} />
+            <StatPill label="STL"  value={item.stlPg} />
+            <StatPill label="BLK"  value={item.blkPg} />
+            <StatPill label="TOV"  value={item.tovPg} />
+            <StatPill label="FG%"  value={item.fgPct}  isPercent />
+            <StatPill label="2P%"  value={item.fg2Pct} isPercent />
+            <StatPill label="3P%"  value={item.fg3Pct} isPercent />
+            <StatPill label="FT%"  value={item.ftPct}  isPercent />
+          </div>
+          {(item.NilValueLow != null || item.NilValue != null) && (
+            <div className="detail-nil">
+              <span className="detail-nil-label">NIL Value</span>
+              <span className="detail-nil-range">
+                {item.NilValueLow != null && item.NilValueHigh != null
+                  ? `$${fmtNil(item.NilValueLow)} – $${fmtNil(item.NilValueHigh)}`
+                  : `~$${fmtNil(item.NilValue)}`
+                }
+              </span>
+              {item.NilTier && <span className={`badge badge--nil badge--nil-${item.NilTier.split(' ')[0].toLowerCase()}`}>{item.NilTier}</span>}
+            </div>
+          )}
+        <CourtImpactWidget player={item} />
+        </>
       )}
 
-      <div className="detail-score-hero" style={{ color: scoreColor(item.FinalScore) }}>
-        {(item.FinalScore * 100).toFixed(1)}
-        <span className="detail-score-denom"> / 100</span>
+      <div className="detail-score-row">
+        <div className="detail-score-cell">
+          <span className="detail-score-cell-label">Fit Score</span>
+          <span className="detail-score-cell-val" style={{ color: scoreColor(item.FinalScore) }}>
+            {(item.FinalScore * 100).toFixed(1)}
+            <span className="detail-score-denom"> / 100</span>
+          </span>
+        </div>
       </div>
 
       <div className="radar-wrap">
@@ -368,6 +663,8 @@ function DetailPanel({ item, mode, gender, onClose }) {
           {item.Explanation.map((e, i) => <span key={i} className="tag">{e}</span>)}
         </div>
       )}
+
+      {shotChart && <ShotChartDiff zones={shotChart} />}
     </div>
   )
 }
@@ -417,9 +714,13 @@ function PlayerCard({ player, rank, selected, onClick }) {
             {player.NilTier && <span className={`badge badge--nil badge--nil-${player.NilTier.split(' ')[0].toLowerCase()}`}>{player.NilTier}</span>}
           </div>
         </div>
+        <CourtImpactWidget player={player} compact />
         <div className="card-sub">
           {player.PrevTeam}
-          {player.NilValue != null && <span className="nil-value">~${player.NilValue.toLocaleString()}</span>}
+          {player.NilValueLow != null && player.NilValueHigh != null
+            ? <span className="nil-value">${fmtNil(player.NilValueLow)} – ${fmtNil(player.NilValueHigh)}</span>
+            : player.NilValue != null && <span className="nil-value">~${fmtNil(player.NilValue)}</span>
+          }
         </div>
         <div className="stat-row">
           <StatPill label="PTS" value={player.ptsScoredPg} />
@@ -438,6 +739,7 @@ function PlayerCard({ player, rank, selected, onClick }) {
       </div>
       <div className="card-score" style={{ color: scoreColor(player.FinalScore) }}>
         <span className="score-big">{Math.round(player.FinalScore * 100)}</span>
+        <span className="score-label">FIT</span>
       </div>
     </div>
   )
@@ -554,7 +856,10 @@ function MatchPanel({ data, loading, error }) {
             <StatPill label="BLK" value={data.blkPg} />
             <StatPill label="FG%"  value={data.fgPct}  isPercent />
             <StatPill label="3P%"  value={data.fg3Pct}  isPercent />
-            {data.NilValue != null && <StatPill label="NIL" value={data.NilValue / 1000} />}
+            {data.NilValueLow != null && data.NilValueHigh != null
+              ? <div className="stat-pill"><span className="stat-val">${fmtNil(data.NilValueLow)}–${fmtNil(data.NilValueHigh)}</span><span className="stat-label">NIL</span></div>
+              : data.NilValue != null && <StatPill label="NIL" value={data.NilValue / 1000} />
+            }
           </div>
         </div>
 
@@ -632,6 +937,8 @@ export default function App() {
   const [loading, setLoading] = useState(false)
   const [selected, setSelected] = useState(null)
   const [error, setError] = useState(null)
+
+  const [subjectData, setSubjectData] = useState(null)
 
   const [nilBudget, setNilBudget]       = useState(null) // null = no filter, or [lo, hi]
   const [yearFilter, setYearFilter]     = useState([])
@@ -729,6 +1036,7 @@ export default function App() {
     setActiveQuery(null)
     setAllOptions({ years: [], positions: [], conferences: [], maxNil: 0, total: 0 })
     clearFilters()
+    setSubjectData(null)
     setMatchPlayer('')
     setMatchTeam('')
     setMatchData(null)
@@ -778,6 +1086,9 @@ export default function App() {
     setActiveQuery(null)
     setAllOptions({ years: [], positions: [], conferences: [], maxNil: 0, total: 0 })
     clearFilters()
+    setSubjectData(null)
+    setRawResults([])
+    setQuery('')
   }
 
   async function handleSelect(val) {
@@ -787,6 +1098,15 @@ export default function App() {
     setError(null)
     setLoading(true)
     clearFilters()
+    setSubjectData(null)
+
+    // Fire entity-stats fetch in parallel (updates banner when it arrives)
+    const entityType = mode === 'team' ? 'team' : 'player'
+    fetch(`${API}/get_entity_stats?type=${entityType}&name=${encodeURIComponent(val)}&gender=${gender}`)
+      .then(r => r.json())
+      .then(d => { if (!d.error) setSubjectData(d) })
+      .catch(() => {})
+
     try {
       const { url } = buildFetchRequest(val, mode, gender, {})
       const data = await fetch(url).then(r => r.json())
@@ -996,6 +1316,7 @@ export default function App() {
         {hasResults && (
           <div className={`results-layout ${selected ? 'results-layout--split' : ''}`}>
             <div className="results-col">
+              <SubjectBanner data={subjectData} mode={mode} />
               <div className="results-header">
                 <strong>{results.length}</strong>&nbsp;matches for&nbsp;
                 <span className="results-query">{query}</span>
